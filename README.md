@@ -21,6 +21,7 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - **Physical ack button:** press GPIO0 (BOOT button) to instantly dismiss the alarm without opening the web UI
 - **Tabbed web UI:** Status / OTA / Alarm tabs with URL-hash persistence; auto-refresh only runs on the Status tab to prevent disruptive reloads while interacting with OTA or Alarm controls
 - **ESP-NOW slave:** alarm state (Off / Armed / Active) is broadcast to a companion ESP32-C6 slave device; slave blinks its GPIO15 LED when the alarm is active
+- **Slaves tab:** master web UI shows a live table of connected slaves — MAC address, IP, RSSI (dBm), WiFi channel, firmware version, connected duration, and last-seen time; auto-refreshes every second
 
 ## Hardware
 
@@ -110,11 +111,12 @@ idf.py -p COM3 flash
 
 ### Master
 
-After booting, open `http://<master-ip>` in a browser. The page has three tabs:
+After booting, open `http://<master-ip>` in a browser. The page has four tabs:
 
 - **Status** — firmware version, active slot, date, time, uptime, free heap. Refreshes every second automatically.
 - **OTA** — slot switcher, firmware upload, and download links.
 - **Alarm** — alarm time picker, enable checkbox, Snooze and Dismiss buttons.
+- **Slaves** — live table of connected ESP-NOW slaves: MAC, IP, RSSI, channel, version, connected time, last seen. Refreshes every second.
 
 ### Slave
 
@@ -160,6 +162,8 @@ Ready-to-flash binaries are in the `releases/` folder:
 | `esp32_clock_v1.6.bin` | Tabbed web UI (Status / OTA / Alarm); hash-based tab persistence; auto-refresh pauses on OTA/Alarm tab |
 | `esp32_clock_v1.7.bin` | ESP-NOW alarm state broadcast to slave device (Off / Armed / Active) |
 | `esp32_slave_v1.0.bin` | Slave firmware for ESP32-C6; receives alarm state via ESP-NOW, blinks GPIO15 LED when active |
+| `esp32_clock_v1.8.bin` | Slaves tab: live table of connected slaves (MAC, IP, RSSI, channel, version, uptime, last seen) |
+| `esp32_slave_v1.1.bin` | Slave broadcasts announce packet (IP + version) every 10 s so master can discover and monitor it |
 
 ## Dependencies
 
@@ -175,3 +179,4 @@ All dependencies are part of ESP-IDF. The following components are used:
 - `esp_http_server` — HTTP server
 - `app_update` — OTA update API
 - `esp_timer` — uptime counter
+- `esp_now` — peer-to-peer wireless communication between master and slave

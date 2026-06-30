@@ -255,6 +255,11 @@ A companion ESP32-C6 slave device receives alarm state from the master via ESP-N
 | F-SLAVE-08 | The slave alarm state shall be color-coded on the status page: orange for Armed, red for Active, no color for Off. |
 | F-SLAVE-09 | The slave shall support OTA firmware update via POST to `/update`, slot switching via POST to `/boot?slot=<0\|1>`, and firmware download via GET `/download?slot=<0\|1>`. |
 | F-SLAVE-10 | The slave project (`slave/`) shall be a standalone IDF project targeting `esp32c6` with its own `partitions.csv` (two 1 MB OTA slots) and `sdkconfig.defaults`. |
+| F-SLAVE-11 | The slave shall broadcast a `slave_announce_t` packet (20 bytes: 4-byte IP + 16-byte version string) every 10 seconds so the master can discover and monitor it without prior pairing. |
+| F-SLAVE-12 | The master shall register an ESP-NOW receive callback and maintain a table of up to 4 known slaves, keyed by MAC address. |
+| F-SLAVE-13 | On each received `slave_announce_t`, the master shall record the slave's MAC, IP, firmware version, RSSI (from `rx_ctrl->rssi`), WiFi channel, first-seen timestamp, and last-seen timestamp. |
+| F-SLAVE-14 | The master web UI shall include a **Slaves** tab displaying a table with one row per known slave: MAC address, IP, RSSI (dBm), WiFi channel, firmware version, connected duration (HH:MM:SS), and last-seen time (seconds ago). |
+| F-SLAVE-15 | The Slaves tab shall auto-refresh every second (same mechanism as the Status tab) and show "No slaves detected yet." when the table is empty. |
 
 ---
 
