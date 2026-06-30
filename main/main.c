@@ -34,7 +34,7 @@ static i2c_master_bus_handle_t bus_handle;
 static i2c_master_dev_handle_t oled_handle;
 static esp_ip4_addr_t s_ip_addr = {0};
 
-/* 5×7 font, column-encoded (LSB = top pixel). Index: '0'-'9'=0-9, ':'=10, ' '=11 */
+/* 5×7 font, column-encoded (LSB = top pixel). Index: '0'-'9'=0-9, ':'=10, ' '=11, '-'=12, '.'=13, 'v'=14 */
 static const uint8_t font[][5] = {
     {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
     {0x00,0x42,0x7F,0x40,0x00}, /* 1 */
@@ -50,6 +50,7 @@ static const uint8_t font[][5] = {
     {0x00,0x00,0x00,0x00,0x00}, /* space */
     {0x00,0x08,0x08,0x08,0x00}, /* - */
     {0x00,0x60,0x60,0x00,0x00}, /* . */
+    {0x03,0x04,0x08,0x04,0x03}, /* v */
 };
 
 static uint8_t fb[PAGES][OLED_W];
@@ -74,7 +75,7 @@ static void oled_flush(void) {
 static void oled_clear(void) { memset(fb, 0, sizeof(fb)); }
 
 static void draw_char(int x, int start_page, char c, int scale) {
-    int idx = (c >= '0' && c <= '9') ? (c - '0') : (c == ':') ? 10 : (c == '-') ? 12 : (c == '.') ? 13 : 11;
+    int idx = (c >= '0' && c <= '9') ? (c - '0') : (c == ':') ? 10 : (c == '-') ? 12 : (c == '.') ? 13 : (c == 'v') ? 14 : 11;
     for (int col = 0; col < 5; col++) {
         uint8_t col_data = font[idx][col];
         for (int sx = 0; sx < scale; sx++) {
@@ -508,12 +509,13 @@ void app_main(void) {
 
         oled_clear();
 
-        /* Top line: IP address (scale 1, page 0) */
-        char ip_buf[20];
+        /* Top line: IP address + firmware version (scale 1, page 0) */
+        char ip_buf[32];
+        const char *ver = esp_app_get_description()->version;
         if (s_ip_addr.addr != 0)
-            snprintf(ip_buf, sizeof(ip_buf), "%d.%d.%d.%d", IP2STR(&s_ip_addr));
+            snprintf(ip_buf, sizeof(ip_buf), "%d.%d.%d.%d %s", IP2STR(&s_ip_addr), ver);
         else
-            snprintf(ip_buf, sizeof(ip_buf), "0.0.0.0");
+            snprintf(ip_buf, sizeof(ip_buf), "0.0.0.0 %s", ver);
         draw_string(0, 0, ip_buf, 1);
 
         /* Middle: date (scale 1, page 1) */
