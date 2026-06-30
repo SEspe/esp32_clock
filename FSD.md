@@ -16,6 +16,7 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 | SDA | GPIO 5 |
 | SCL | GPIO 4 |
 | I2C speed | 400 kHz (fast mode) |
+| Alarm LED | GPIO 14 (external LED + resistor to GND) |
 | Power | 3.3 V |
 
 ---
@@ -52,6 +53,19 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 | F-DISP-05 | Show the current date in `DD.MM.YYYY` format centered horizontally at scale ×1 (page 1). |
 | F-DISP-06 | Refresh the display once per second. |
 
+### 3.4 Alarm
+
+| ID | Requirement |
+|----|-------------|
+| F-ALM-01 | The user shall be able to set a daily alarm time (HH:MM) via the web UI; the setting persists in NVS across reboots. |
+| F-ALM-02 | The alarm can be independently enabled or disabled without changing the stored time. |
+| F-ALM-03 | When the alarm fires (local time matches HH:MM, second < 5), an external LED on GPIO14 shall flash with a 1-second period (500 ms on, 500 ms off) driven by a dedicated FreeRTOS task. |
+| F-ALM-04 | While the alarm is active, the OLED display shall invert its pixels each second (alternating between normal and inverted mode using SSD1306 commands `0xA6`/`0xA7`). |
+| F-ALM-05 | The alarm shall auto-silence after 60 seconds if not dismissed. |
+| F-ALM-06 | The user shall be able to dismiss the alarm immediately via a **Dismiss** button on the web page; the LED is turned off immediately on dismiss. |
+| F-ALM-07 | The alarm shall fire at most once per alarm time event (de-bounced by tracking the last trigger timestamp; re-arm requires ≥ 60 s gap). |
+| F-ALM-08 | The web page shall display the current alarm status: **Off** (disabled), **Armed** (enabled, not firing), or **ACTIVE** (currently ringing). |
+
 ---
 
 ## 4. Non-Functional Requirements
@@ -69,7 +83,7 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 
 ```
 ┌────────────────────────────────┐  ← 128 px wide
-│ 192.168.86.147 v1.2   page 0  │  ← IP + version, scale 1 (7 px tall)
+│ 192.168.86.147 v1.4   page 0  │  ← IP + version, scale 1 (7 px tall)
 │       30.06.2026      page 1  │  ← Date, scale 1 (7 px tall)
 │                        page 2  │
 │     12:34:56          page 3  │  ← Time, scale 2 (14 px tall)
@@ -177,6 +191,16 @@ Free heap: 211240 B
 | F-DL-02 | The `/download` handler shall determine the exact firmware image size by parsing the ESP image header: reading `segment_count`, summing segment sizes, adding the checksum byte, and adding the SHA256 hash if `hash_appended` is set. |
 | F-DL-03 | The handler shall stream the exact image bytes from flash using `esp_partition_read` and `httpd_resp_send_chunk`, with no trailing padding. |
 | F-DL-04 | The response shall use `Content-Type: application/octet-stream` and `Content-Disposition: attachment; filename="esp32_clock_vX.X.bin"`, where the version is read from the partition's app description. |
+
+### 9.6 Alarm Web Interface
+
+| ID | Requirement |
+|----|-------------|
+| F-WEB-ALM-01 | The status page shall include an **Alarm** section showing the current status (Off / Armed / ACTIVE). |
+| F-WEB-ALM-02 | The section shall include a `<input type="time">` pre-filled with the saved alarm time and an **Enabled** checkbox. |
+| F-WEB-ALM-03 | Clicking **Set** shall POST to `/alarm` with `hour`, `min`, and `enabled` fields; the server saves to NVS and responds with `text/plain`. |
+| F-WEB-ALM-04 | A **Dismiss** button shall POST to `/dismiss`; the button is disabled when no alarm is active. |
+| F-WEB-ALM-05 | Both Set and Dismiss actions shall stop the auto-refresh timer and reload the page after the response is received. |
 
 ### 9.4 OTA Slot Switching
 

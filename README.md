@@ -11,11 +11,12 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - Shows `--:--:--` / `--.--.----` while waiting for NTP sync
 - Shows `0.0.0.0` if WiFi is not connected
 - Correct Norwegian timezone (UTC+1 CET in winter, auto-switches to UTC+2 CEST in summer)
-- OLED page 0 shows IP address and firmware version together, e.g. `192.168.86.147 v1.3`
+- OLED page 0 shows IP address and firmware version together, e.g. `192.168.86.147 v1.4`
 - HTTP status page on port 80: firmware version, active OTA slot, date, time, uptime, free heap
 - OTA firmware update via the web page (no USB required after initial flash)
 - OTA slot switching: boot either installed firmware version from the web page
 - Firmware download: save any installed slot's binary directly from the web page
+- **Alarm:** configurable daily alarm via web UI — GPIO14 LED flashes (1 s period) and OLED inverts; persisted in NVS; auto-silences after 60 s or on manual Dismiss
 
 ## Hardware
 
@@ -25,6 +26,7 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 | Display | SSD1306 OLED 128×64, I2C address `0x3C` |
 | SDA | GPIO 5 |
 | SCL | GPIO 4 |
+| Alarm LED | GPIO 14 (external LED + resistor to GND) |
 
 ## Wiring
 
@@ -35,6 +37,11 @@ ESP32          SSD1306
 GND     →     GND
 GPIO5   →     SDA
 GPIO4   →     SCL
+
+ESP32          LED
+-----          ---
+GPIO14  →     Anode (via ~330 Ω resistor)
+GND     →     Cathode
 ```
 
 ## Configuration
@@ -102,16 +109,18 @@ Ready-to-flash binaries are in the `releases/` folder:
 | `esp32_clock_v1.1.bin` | Slot switching, uptime |
 | `esp32_clock_v1.2.bin` | Adds free heap, download links, mobile file picker |
 | `esp32_clock_v1.3.bin` | OLED shows firmware version alongside IP address |
+| `esp32_clock_v1.4.bin` | Alarm: GPIO14 LED + OLED inversion, web UI, NVS persistence |
 
 ## Dependencies
 
 All dependencies are part of ESP-IDF. The following components are used:
 
-- `nvs_flash` — non-volatile storage
+- `nvs_flash` / `nvs` — non-volatile storage (settings + alarm persistence)
 - `esp_wifi` — WiFi station mode
 - `esp_event` — event loop
 - `esp_netif` — network interface
 - `esp_driver_i2c` — I2C master driver (new API)
+- `esp_driver_gpio` — GPIO output (alarm LED)
 - `lwip` — TCP/IP stack (NTP via SNTP)
 - `esp_http_server` — HTTP server
 - `app_update` — OTA update API
