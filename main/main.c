@@ -192,7 +192,7 @@ static esp_err_t root_handler(httpd_req_t *req) {
     localtime_r(&now, &t);
 
     const esp_app_desc_t *desc = esp_app_get_description();
-    char date[16], tim[12];
+    char date[36], tim[12];
     if (t.tm_year >= (2020 - 1900)) {
         snprintf(date, sizeof(date), "%02d.%02d.%04d",
                  t.tm_mday, t.tm_mon + 1, t.tm_year + 1900);
