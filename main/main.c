@@ -510,7 +510,7 @@ void app_main(void) {
         oled_clear();
 
         /* Top line: IP address + firmware version (scale 1, page 0) */
-        char ip_buf[32];
+        char ip_buf[48];
         const char *ver = esp_app_get_description()->version;
         if (s_ip_addr.addr != 0)
             snprintf(ip_buf, sizeof(ip_buf), "%d.%d.%d.%d %s", IP2STR(&s_ip_addr), ver);
