@@ -1,10 +1,14 @@
-# Functional Specification Document — ESP32 NTP Clock with Alarm and with slave to display AlarmState
+# Functional Specification Document — ESP32 NTP Clock with Alarm and ESP-NOW Slave
 
 ## 1. Overview
 
-A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, and displays the current Norwegian local time on an SSD1306 OLED display. 
+A two-device ESP-NOW system consisting of a master and a slave.
+
+**Master (ESP32):** bare-metal firmware that connects to WiFi, synchronizes time via NTP, and displays the current Norwegian local time on an SSD1306 OLED display. Hosts a tabbed web UI (Status / OTA / Alarm / Slaves) on port 80. Broadcasts alarm state (Off / Armed / Active) to all ESP-NOW peers on every change and every 30 s. Tracks connected slaves and displays their MAC, IP, RSSI, channel, version, and uptime in the Slaves tab.
+
+**Slave (ESP32-C6):** companion device that receives alarm state from the master via ESP-NOW and blinks a GPIO15 LED when the alarm is active. Broadcasts a self-announcement packet (IP + version) every 10 s so the master can discover and monitor it. Hosts its own web UI (Status / OTA) for independent OTA updates.
+
 No RTOS abstractions beyond FreeRTOS task delays; no external libraries beyond ESP-IDF.
-A separate slave ESP32  connected with ESPNOW  ,  displaying alarmstate on led
 
 ---
 
