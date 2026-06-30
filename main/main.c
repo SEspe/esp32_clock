@@ -345,15 +345,13 @@ static esp_err_t root_handler(httpd_req_t *req) {
     const char *r1 = (running == p1) ? " &lt;-- running" : "";
     const char *b0 = (running == p0) ? "disabled" : "";
     const char *b1 = (running == p1) ? "disabled" : "";
-
     const char *slot_label = running ? running->label : "?";
     uint32_t free_heap = esp_get_free_heap_size();
 
-    /* snapshot volatile alarm state once */
-    uint8_t a_h    = alarm_hour;
-    uint8_t a_m    = alarm_min;
-    uint8_t a_en   = alarm_enabled;
-    bool    a_act  = alarm_active;
+    uint8_t a_h     = alarm_hour;
+    uint8_t a_m     = alarm_min;
+    uint8_t a_en    = alarm_enabled;
+    bool    a_act   = alarm_active;
     time_t  s_until = snooze_until;
 
     char alarm_status[48];
@@ -362,89 +360,147 @@ static esp_err_t root_handler(httpd_req_t *req) {
     } else if (s_until != 0) {
         struct tm st;
         localtime_r(&s_until, &st);
-        snprintf(alarm_status, sizeof(alarm_status), "Snoozed &mdash; rings at %02d:%02d",
-                 st.tm_hour, st.tm_min);
+        snprintf(alarm_status, sizeof(alarm_status),
+                 "Snoozed &mdash; rings at %02d:%02d", st.tm_hour, st.tm_min);
     } else {
         snprintf(alarm_status, sizeof(alarm_status), "%s", a_en ? "Armed" : "Off");
     }
 
-    static char body[4096];
-    snprintf(body, sizeof(body),
-        "<!DOCTYPE html><html><head>"
-        "<style>body{font-family:monospace;padding:20px}</style>"
-        "</head><body>"
-        "<pre>Firmware: %s\nSlot:     %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"\nFree heap: %"PRIu32" B</pre>"
-        "<hr><h3>Installed slots</h3>"
-        "<p>ota_0: %s%s <a href=\"/download?slot=0\">[Download]</a> <button %s onclick=\"boot(0)\">Boot this</button></p>"
-        "<p>ota_1: %s%s <a href=\"/download?slot=1\">[Download]</a> <button %s onclick=\"boot(1)\">Boot this</button></p>"
-        "<hr><h3>Upload new firmware</h3>"
-        "<input type=\"file\" id=\"fw\" style=\"display:none\">"
-        "<button onclick=\"pickFile()\">Choose File</button>"
-        "<span id=\"fn\" style=\"margin-left:8px\">No file selected</span><br><br>"
-        "<button id=\"upbtn\" onclick=\"upload()\" disabled>Upload &amp; Reboot</button>"
-        "<div id=\"st\"></div>"
-        "<hr><h3>Alarm</h3>"
+    httpd_resp_set_type(req, "text/html");
+#define SEND(s) httpd_resp_send_chunk(req, (s), strlen(s))
+
+    /* ── Head + CSS + tab bar ─────────────────────────────────────────── */
+    SEND("<!DOCTYPE html><html><head>"
+         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+         "<style>"
+         "body{font-family:monospace;padding:16px;max-width:520px}"
+         ".tabs{display:flex;gap:4px;margin-bottom:18px}"
+         ".tb{flex:1;padding:11px 4px;cursor:pointer;border:1px solid #999;"
+         "background:#eee;font-family:monospace;font-size:15px}"
+         ".tb.on{background:#333;color:#fff;border-color:#333}"
+         ".tc{display:none}.tc.on{display:block}"
+         "button{font-family:monospace;padding:7px 12px;margin:2px}"
+         "</style></head><body>"
+         "<div class='tabs'>"
+         "<button class='tb' data-tab='status' onclick=\"showTab('status')\">Status</button>"
+         "<button class='tb' data-tab='ota'    onclick=\"showTab('ota')\">OTA</button>"
+         "<button class='tb' data-tab='alarm'  onclick=\"showTab('alarm')\">Alarm</button>"
+         "</div>");
+
+    /* ── Status tab ───────────────────────────────────────────────────── */
+    static char s_tab[320];
+    snprintf(s_tab, sizeof(s_tab),
+        "<div id='ts' class='tc'>"
+        "<pre>Firmware: %s\nSlot:     %s\nDate:     %s\nTime:     %s\n"
+        "Uptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"\nFree heap: %"PRIu32" B</pre>"
+        "</div>",
+        desc->version, slot_label, date, tim, up_h, up_m, up_s, free_heap);
+    SEND(s_tab);
+
+    /* ── OTA tab ──────────────────────────────────────────────────────── */
+    static char o_tab[768];
+    snprintf(o_tab, sizeof(o_tab),
+        "<div id='to' class='tc'>"
+        "<h3>Installed slots</h3>"
+        "<p>ota_0: %s%s"
+        " <a href='/download?slot=0'>[Download]</a>"
+        " <button %s onclick='boot(0)'>Boot this</button></p>"
+        "<p>ota_1: %s%s"
+        " <a href='/download?slot=1'>[Download]</a>"
+        " <button %s onclick='boot(1)'>Boot this</button></p>"
+        "<h3>Upload new firmware</h3>"
+        "<input type='file' id='fw' style='display:none'>"
+        "<button onclick='pickFile()'>Choose File</button>"
+        "<span id='fn' style='margin-left:8px'>No file selected</span><br><br>"
+        "<button id='upbtn' onclick='upload()' disabled>Upload &amp; Reboot</button>"
+        "<div id='st'></div>"
+        "</div>",
+        v0, r0, b0, v1, r1, b1);
+    SEND(o_tab);
+
+    /* ── Alarm tab ────────────────────────────────────────────────────── */
+    static char a_tab[512];
+    snprintf(a_tab, sizeof(a_tab),
+        "<div id='ta' class='tc'>"
         "<p>Status: <b>%s</b></p>"
-        "<input type=\"time\" id=\"at\" value=\"%02d:%02d\">"
-        " <label><input type=\"checkbox\" id=\"aen\" %s> Enabled</label>"
-        " <button onclick=\"setAlarm()\">Set</button>"
-        "<br><br>"
-        "<button id=\"snz\" onclick=\"snoozeAlarm()\" %s>Snooze 5 min</button>"
-        " <button id=\"disc\" onclick=\"dismissAlarm()\" %s>Dismiss</button>"
-        "<div id=\"ast\"></div>"
-        "<script>"
-        "var tmr=setInterval(function(){location.reload()},1000);"
-        "function pickFile(){clearInterval(tmr);document.getElementById('fw').click();}"
-        "document.getElementById('fw').onchange=function(){"
-        "if(this.files[0]){"
-        "document.getElementById('fn').textContent=this.files[0].name;"
-        "document.getElementById('upbtn').disabled=false;}}"
-        ";"
-        "async function boot(s){"
-        "clearInterval(tmr);"
-        "document.getElementById('st').textContent='Switching slot...';"
-        "const r=await fetch('/boot?slot='+s,{method:'POST'});"
-        "document.getElementById('st').textContent=await r.text();}"
-        "async function upload(){"
-        "const f=document.getElementById('fw').files[0];"
-        "if(!f){document.getElementById('st').textContent='Select a .bin file first';return;}"
-        "document.getElementById('st').textContent='Uploading '+f.name+'...';"
-        "try{"
-        "const r=await fetch('/update',{method:'POST',body:f,"
-        "headers:{'Content-Type':'application/octet-stream'}});"
-        "document.getElementById('st').textContent=await r.text();"
-        "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
-        "async function setAlarm(){"
-        "clearInterval(tmr);"
-        "const tv=document.getElementById('at').value;"
-        "const en=document.getElementById('aen').checked?1:0;"
-        "const[h,m]=tv.split(':');"
-        "const r=await fetch('/alarm',{method:'POST',"
-        "body:'hour='+h+'&min='+m+'&enabled='+en,"
-        "headers:{'Content-Type':'application/x-www-form-urlencoded'}});"
-        "document.getElementById('ast').textContent=await r.text();"
-        "setTimeout(()=>location.reload(),800);}"
-        "async function snoozeAlarm(){"
-        "clearInterval(tmr);"
-        "const r=await fetch('/snooze',{method:'POST'});"
-        "document.getElementById('ast').textContent=await r.text();"
-        "setTimeout(()=>location.reload(),500);}"
-        "async function dismissAlarm(){"
-        "clearInterval(tmr);"
-        "const r=await fetch('/dismiss',{method:'POST'});"
-        "document.getElementById('ast').textContent=await r.text();"
-        "setTimeout(()=>location.reload(),500);}"
-        "</script></body></html>",
-        desc->version, slot_label, date, tim, up_h, up_m, up_s, free_heap,
-        v0, r0, b0, v1, r1, b1,
-        alarm_status,
-        a_h, a_m,
+        "<input type='time' id='at' value='%02d:%02d' onfocus='stopRefresh()'>"
+        " <label><input type='checkbox' id='aen' %s onclick='stopRefresh()'>"
+        " Enabled</label>"
+        " <button onclick='setAlarm()'>Set</button><br><br>"
+        "<button id='snz' onclick='snoozeAlarm()' %s>Snooze 5 min</button>"
+        " <button id='disc' onclick='dismissAlarm()' %s>Dismiss</button>"
+        "<div id='ast'></div>"
+        "</div>",
+        alarm_status, a_h, a_m,
         a_en ? "checked" : "",
         a_act ? "" : "disabled",
         a_act ? "" : "disabled");
+    SEND(a_tab);
 
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_sendstr(req, body);
+    /* ── JavaScript ───────────────────────────────────────────────────── */
+    SEND("<script>"
+         /* refresh control — only active on Status tab */
+         "var tmr=null;"
+         "function startRefresh(){if(!tmr)tmr=setInterval(()=>location.reload(),1000);}"
+         "function stopRefresh(){clearInterval(tmr);tmr=null;}"
+         /* tab switching — preserves selection in URL hash across reloads */
+         "function showTab(n){"
+         "['ts','to','ta'].forEach(function(id){"
+         "document.getElementById(id).className='tc';});"
+         "document.querySelectorAll('.tb').forEach(function(b){"
+         "b.classList.remove('on');});"
+         "var ids={status:'ts',ota:'to',alarm:'ta'};"
+         "document.getElementById(ids[n]).className='tc on';"
+         "document.querySelector('[data-tab=\"'+n+'\"]').classList.add('on');"
+         "location.hash=n;"
+         "if(n==='status'){startRefresh();}else{stopRefresh();}}"
+         /* OTA */
+         "function pickFile(){stopRefresh();document.getElementById('fw').click();}"
+         "document.getElementById('fw').onchange=function(){"
+         "if(this.files[0]){"
+         "document.getElementById('fn').textContent=this.files[0].name;"
+         "document.getElementById('upbtn').disabled=false;}};"
+         "async function boot(s){"
+         "stopRefresh();"
+         "document.getElementById('st').textContent='Switching slot...';"
+         "var r=await fetch('/boot?slot='+s,{method:'POST'});"
+         "document.getElementById('st').textContent=await r.text();}"
+         "async function upload(){"
+         "var f=document.getElementById('fw').files[0];"
+         "if(!f){document.getElementById('st').textContent='Select a .bin file first';return;}"
+         "document.getElementById('st').textContent='Uploading '+f.name+'...';"
+         "try{"
+         "var r=await fetch('/update',{method:'POST',body:f,"
+         "headers:{'Content-Type':'application/octet-stream'}});"
+         "document.getElementById('st').textContent=await r.text();"
+         "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
+         /* Alarm */
+         "async function setAlarm(){"
+         "stopRefresh();"
+         "var tv=document.getElementById('at').value;"
+         "var en=document.getElementById('aen').checked?1:0;"
+         "var p=tv.split(':');"
+         "var r=await fetch('/alarm',{method:'POST',"
+         "body:'hour='+p[0]+'&min='+p[1]+'&enabled='+en,"
+         "headers:{'Content-Type':'application/x-www-form-urlencoded'}});"
+         "document.getElementById('ast').textContent=await r.text();"
+         "setTimeout(()=>location.reload(),800);}"
+         "async function snoozeAlarm(){"
+         "stopRefresh();"
+         "var r=await fetch('/snooze',{method:'POST'});"
+         "document.getElementById('ast').textContent=await r.text();"
+         "setTimeout(()=>location.reload(),500);}"
+         "async function dismissAlarm(){"
+         "stopRefresh();"
+         "var r=await fetch('/dismiss',{method:'POST'});"
+         "document.getElementById('ast').textContent=await r.text();"
+         "setTimeout(()=>location.reload(),500);}"
+         /* restore tab from URL hash, default to status */
+         "showTab(location.hash.slice(1)||'status');"
+         "</script></body></html>");
+
+    httpd_resp_send_chunk(req, NULL, 0);
+#undef SEND
     return ESP_OK;
 }
 
