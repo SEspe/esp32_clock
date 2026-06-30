@@ -162,8 +162,8 @@ static void wifi_init(void) {
 /* ── NTP ──────────────────────────────────────────────────────────────── */
 
 static void time_init(void) {
-    /* Norway: CET (UTC+1) / CEST (UTC+2) */
-    setenv("TZ", "UTC-2", 1);
+    /* Norway: CET (UTC+1) / CEST (UTC+2) with DST rules */
+    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
     tzset();
 
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
@@ -225,6 +225,15 @@ void app_main(void) {
         else
             snprintf(ip_buf, sizeof(ip_buf), "0.0.0.0");
         draw_string(0, 0, ip_buf, 1);
+
+        /* Middle: date (scale 1, page 1) */
+        char date_buf[36];
+        if (t.tm_year >= (2020 - 1900))
+            snprintf(date_buf, sizeof(date_buf), "%02d.%02d.%04d",
+                     t.tm_mday, t.tm_mon + 1, t.tm_year + 1900);
+        else
+            snprintf(date_buf, sizeof(date_buf), "--.--.----");
+        draw_string(34, 1, date_buf, 1);
 
         /* Bottom: time (scale 2, pages 3-6) */
         if (t.tm_year < (2020 - 1900)) {

@@ -5,11 +5,12 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 ## Features
 
 - Connects to WiFi and syncs time from `pool.ntp.org`
-- Displays current time in 24-hour format (HH:MM:SS)
+- Displays current time in 24-hour format (HH:MM:SS), large text
+- Displays current date in DD.MM.YYYY format
 - Shows assigned IP address on the top of the screen
-- Shows `--:--:--` while waiting for NTP sync
+- Shows `--:--:--` / `--.--.----` while waiting for NTP sync
 - Shows `0.0.0.0` if WiFi is not connected
-- Correct Norwegian timezone (UTC+2 CEST in summer, auto-switches to UTC+1 CET in winter)
+- Correct Norwegian timezone (UTC+1 CET in winter, auto-switches to UTC+2 CEST in summer)
 
 ## Hardware
 
@@ -50,7 +51,7 @@ idf.py -p COM4 flash
 ```
 
 > **Note:** If auto-reset fails (common when WiFi is active), enter download mode manually:
-> unplug USB → hold BOOT button → plug USB back in → wait 2 seconds → release BOOT → flash with `--before no-reset`.
+> hold BOOT → press and release EN/RST → release BOOT → then run the flash command.
 
 ## Dependencies
 
