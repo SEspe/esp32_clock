@@ -143,6 +143,7 @@ The system exposes an HTTP server on port 80, accessible from any device on the 
 | F-WEB-03 | The firmware version shall be derived from the ESP-IDF app description (`esp_app_get_description()`), matching the git-based version shown in boot logs. |
 | F-WEB-04 | Date and time displayed on the web page shall use the same Norwegian timezone (CET/CEST) as the OLED. |
 | F-WEB-05 | The page shall refresh automatically every second via JavaScript `setInterval`. |
+| F-WEB-06 | The status page shall display the current free heap in bytes via `esp_get_free_heap_size()`. |
 
 ### 9.2 Status Page Format
 
@@ -152,19 +153,30 @@ Slot:     ota_0
 Date:     30.06.2026
 Time:     12:34:56
 Uptime:   00:05:32
+Free heap: 211240 B
 ```
 
 ### 9.3 OTA Firmware Upload
 
 | ID | Requirement |
 |----|-------------|
-| F-OTA-01 | The status page shall include a file-picker and "Upload & Reboot" button for OTA firmware update. |
-| F-OTA-02 | When a file is selected, the JavaScript page-refresh timer shall be cancelled so the file selection is not cleared. |
-| F-OTA-03 | Clicking the button shall POST the selected `.bin` file to `/update` as `application/octet-stream`. |
-| F-OTA-04 | The `/update` handler shall write the received binary to the inactive OTA partition using `esp_ota_write`. |
-| F-OTA-05 | On success, the handler shall call `esp_ota_set_boot_partition` and reboot after 1 second. |
-| F-OTA-06 | On any error (no OTA partition, write failure, receive error), the handler shall return HTTP 500 with a plain-text description and abort the OTA handle. |
-| F-OTA-07 | The partition table shall provide two equally-sized OTA slots (`ota_0` / `ota_1`, 1 MB each) on 4 MB flash, with no factory partition. |
+| F-OTA-01 | The status page shall include a "Choose File" button and "Upload & Reboot" button for OTA firmware update. |
+| F-OTA-02 | Tapping "Choose File" shall stop the auto-refresh timer before opening the file dialog, preventing the page from reloading while the picker is open. |
+| F-OTA-03 | The selected filename shall be displayed in a `<span>` next to the button; "Upload & Reboot" shall remain disabled until a file is confirmed selected. |
+| F-OTA-04 | Clicking "Upload & Reboot" shall POST the selected `.bin` file to `/update` as `application/octet-stream`. |
+| F-OTA-05 | The `/update` handler shall write the received binary to the inactive OTA partition using `esp_ota_write`. |
+| F-OTA-06 | On success, the handler shall call `esp_ota_set_boot_partition` and reboot after 1 second. |
+| F-OTA-07 | On any error (no OTA partition, write failure, receive error), the handler shall return HTTP 500 with a plain-text description and abort the OTA handle. |
+| F-OTA-08 | The partition table shall provide two equally-sized OTA slots (`ota_0` / `ota_1`, 1 MB each) on 4 MB flash, with no factory partition. |
+
+### 9.5 Firmware Download
+
+| ID | Requirement |
+|----|-------------|
+| F-DL-01 | Each slot entry in the "Installed slots" section shall include a `[Download]` link pointing to `/download?slot=<0\|1>`. |
+| F-DL-02 | The `/download` handler shall determine the exact firmware image size by parsing the ESP image header: reading `segment_count`, summing segment sizes, adding the checksum byte, and adding the SHA256 hash if `hash_appended` is set. |
+| F-DL-03 | The handler shall stream the exact image bytes from flash using `esp_partition_read` and `httpd_resp_send_chunk`, with no trailing padding. |
+| F-DL-04 | The response shall use `Content-Type: application/octet-stream` and `Content-Disposition: attachment; filename="esp32_clock_vX.X.bin"`, where the version is read from the partition's app description. |
 
 ### 9.4 OTA Slot Switching
 

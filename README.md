@@ -83,11 +83,22 @@ The **Installed slots** section on the web page shows both OTA partitions with t
 
 ```
 Installed slots
-ota_0: v1.1   [Boot this]
-ota_1: v1.2   [Boot this]  ← running
+ota_0: v1.1   [Download]  [Boot this]
+ota_1: v1.2   [Download]  [Boot this]  ← running
 ```
 
 Click **Boot this** next to any slot to switch to that version immediately — no file upload needed. The currently-running slot's button is disabled.
+
+Click **[Download]** to save the firmware from any slot as a `.bin` file (e.g. `esp32_clock_v1.1.bin`). The file is streamed directly from flash and can be uploaded back via the OTA file picker.
+
+## Pre-built Binaries
+
+Ready-to-flash binaries are in the `releases/` folder:
+
+| File | Description |
+|------|-------------|
+| `esp32_clock_v1.1.bin` | Slot switching, uptime |
+| `esp32_clock_v1.2.bin` | Adds free heap, download links, mobile file picker |
 
 ## Dependencies
 
