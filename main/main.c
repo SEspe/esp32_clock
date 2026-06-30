@@ -16,6 +16,7 @@
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 
 #define WIFI_SSID           "EinebuNest"
 #define WIFI_PASS           "LunRibbe"
@@ -230,23 +231,31 @@ static esp_err_t root_handler(httpd_req_t *req) {
     const char *b1 = (running == p1) ? "disabled" : "";
 
     const char *slot_label = running ? running->label : "?";
+    uint32_t free_heap = esp_get_free_heap_size();
 
     char body[2048];
     snprintf(body, sizeof(body),
         "<!DOCTYPE html><html><head>"
         "<style>body{font-family:monospace;padding:20px}</style>"
         "</head><body>"
-        "<pre>Firmware: %s\nSlot:     %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"</pre>"
+        "<pre>Firmware: %s\nSlot:     %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"\nFree heap: %"PRIu32" B</pre>"
         "<hr><h3>Installed slots</h3>"
         "<p>ota_0: %s%s <button %s onclick=\"boot(0)\">Boot this</button></p>"
         "<p>ota_1: %s%s <button %s onclick=\"boot(1)\">Boot this</button></p>"
         "<hr><h3>Upload new firmware</h3>"
-        "<input type=\"file\" id=\"fw\">"
-        "<button onclick=\"upload()\">Upload &amp; Reboot</button>"
+        "<input type=\"file\" id=\"fw\" style=\"display:none\">"
+        "<button onclick=\"pickFile()\">Choose File</button>"
+        "<span id=\"fn\" style=\"margin-left:8px\">No file selected</span><br><br>"
+        "<button id=\"upbtn\" onclick=\"upload()\" disabled>Upload &amp; Reboot</button>"
         "<div id=\"st\"></div>"
         "<script>"
         "var tmr=setInterval(function(){location.reload()},1000);"
-        "document.getElementById('fw').onchange=function(){if(this.files[0])clearInterval(tmr);};"
+        "function pickFile(){clearInterval(tmr);document.getElementById('fw').click();}"
+        "document.getElementById('fw').onchange=function(){"
+        "if(this.files[0]){"
+        "document.getElementById('fn').textContent=this.files[0].name;"
+        "document.getElementById('upbtn').disabled=false;}}"
+        ";"
         "async function boot(s){"
         "clearInterval(tmr);"
         "document.getElementById('st').textContent='Switching slot...';"
@@ -255,7 +264,6 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "async function upload(){"
         "const f=document.getElementById('fw').files[0];"
         "if(!f){document.getElementById('st').textContent='Select a .bin file first';return;}"
-        "clearInterval(tmr);"
         "document.getElementById('st').textContent='Uploading '+f.name+'...';"
         "try{"
         "const r=await fetch('/update',{method:'POST',body:f,"
@@ -263,7 +271,7 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "document.getElementById('st').textContent=await r.text();"
         "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
         "</script></body></html>",
-        desc->version, slot_label, date, tim, up_h, up_m, up_s,
+        desc->version, slot_label, date, tim, up_h, up_m, up_s, free_heap,
         v0, r0, b0, v1, r1, b1);
 
     httpd_resp_set_type(req, "text/html");
