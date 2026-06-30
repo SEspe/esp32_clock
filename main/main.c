@@ -11,6 +11,8 @@
 #include "esp_sntp.h"
 #include "nvs_flash.h"
 #include "driver/i2c_master.h"
+#include "esp_http_server.h"
+#include "esp_app_desc.h"
 
 #define WIFI_SSID           "EinebuNest"
 #define WIFI_PASS           "LunRibbe"
@@ -156,6 +158,7 @@ static void wifi_init(void) {
     ESP_ERROR_CHECK(esp_wifi_start());
 
     xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT, false, true, pdMS_TO_TICKS(60000));
+    esp_wifi_set_ps(WIFI_PS_NONE);
     ESP_LOGI(TAG, "WiFi connected");
 }
 
@@ -178,6 +181,61 @@ static void time_init(void) {
         localtime_r(&now, &t);
     }
     ESP_LOGI(TAG, "Time synced");
+}
+
+/* ── Web server ───────────────────────────────────────────────────────── */
+
+static esp_err_t root_handler(httpd_req_t *req) {
+    time_t now = time(NULL);
+    struct tm t;
+    localtime_r(&now, &t);
+
+    const esp_app_desc_t *desc = esp_app_get_description();
+
+    char body[320];
+    if (t.tm_year >= (2020 - 1900)) {
+        snprintf(body, sizeof(body),
+            "<!DOCTYPE html><html><head>"
+            "<meta http-equiv=\"refresh\" content=\"1\">"
+            "</head><body><pre>"
+            "Firmware: %s\n"
+            "Date:     %02d.%02d.%04d\n"
+            "Time:     %02d:%02d:%02d"
+            "</pre></body></html>",
+            desc->version,
+            t.tm_mday, t.tm_mon + 1, t.tm_year + 1900,
+            t.tm_hour, t.tm_min, t.tm_sec);
+    } else {
+        snprintf(body, sizeof(body),
+            "<!DOCTYPE html><html><head>"
+            "<meta http-equiv=\"refresh\" content=\"1\">"
+            "</head><body><pre>"
+            "Firmware: %s\n"
+            "Date:     --.--.----\n"
+            "Time:     --:--:--"
+            "</pre></body></html>",
+            desc->version);
+    }
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_sendstr(req, body);
+    return ESP_OK;
+}
+
+static void webserver_init(void) {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    httpd_handle_t server;
+    if (httpd_start(&server, &config) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start web server");
+        return;
+    }
+    httpd_uri_t root = {
+        .uri     = "/",
+        .method  = HTTP_GET,
+        .handler = root_handler,
+    };
+    httpd_register_uri_handler(server, &root);
+    ESP_LOGI(TAG, "Web server started on http://" IPSTR, IP2STR(&s_ip_addr));
 }
 
 /* ── Main ─────────────────────────────────────────────────────────────── */
@@ -210,6 +268,7 @@ void app_main(void) {
 
     wifi_init();
     time_init();
+    webserver_init();
 
     while (1) {
         time_t now = time(NULL);

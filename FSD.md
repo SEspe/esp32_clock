@@ -130,7 +130,33 @@ If auto-reset fails (common when WiFi is active):
 
 ---
 
-## 9. Known Limitations
+## 9. Web Server
+
+The system shall expose an HTTP server on port 80, accessible from any device on the local network, showing live device status.
+
+### 9.1 Requirements
+
+| ID | Requirement |
+|----|-------------|
+| F-WEB-01 | Start an HTTP server on port 80 after WiFi connects. |
+| F-WEB-02 | Serve a single status page at `/` displaying the firmware version, current date, and current time. |
+| F-WEB-03 | The firmware version shall be derived from the ESP-IDF app description (`esp_app_get_description()`), matching the git-based version shown in boot logs. |
+| F-WEB-04 | Date and time displayed on the web page shall use the same Norwegian timezone (CET/CEST) as the OLED. |
+| F-WEB-05 | The page shall refresh automatically every second. |
+
+### 9.2 Response Format
+
+The status page shall return `Content-Type: text/html` with a minimal HTML body, for example:
+
+```
+Firmware: 4eb3589
+Date:     30.06.2026
+Time:     12:34:56
+```
+
+---
+
+## 10. Known Limitations
 
 | ID | Description |
 |----|-------------|
