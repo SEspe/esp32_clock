@@ -20,8 +20,11 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - **Snooze:** web **Snooze 5 min** button re-fires the alarm after 5 minutes; status shows `Snoozed — rings at HH:MM`
 - **Physical ack button:** press GPIO0 (BOOT button) to instantly dismiss the alarm without opening the web UI
 - **Tabbed web UI:** Status / OTA / Alarm tabs with URL-hash persistence; auto-refresh only runs on the Status tab to prevent disruptive reloads while interacting with OTA or Alarm controls
+- **ESP-NOW slave:** alarm state (Off / Armed / Active) is broadcast to a companion ESP32-C6 slave device; slave blinks its GPIO15 LED when the alarm is active
 
 ## Hardware
+
+### Master (ESP32)
 
 | Component | Detail |
 |-----------|--------|
@@ -32,7 +35,16 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 | Alarm LED | GPIO 14 (external LED + resistor to GND) |
 | Ack button | GPIO 0 (BOOT button, active-low, internal pull-up) |
 
+### Slave (ESP32-C6)
+
+| Component | Detail |
+|-----------|--------|
+| MCU | ESP32-C6 |
+| Alarm LED | GPIO 15 |
+
 ## Wiring
+
+### Master
 
 ```
 ESP32          SSD1306
@@ -53,9 +65,18 @@ GPIO0   →     One leg
 GND     →     Other leg   (internal pull-up; press = active low)
 ```
 
+### Slave
+
+```
+ESP32-C6       LED
+--------       ---
+GPIO15  →     Anode (via ~330 Ω resistor)
+GND     →     Cathode
+```
+
 ## Configuration
 
-Edit `main/main.c` to set your WiFi credentials:
+Edit `main/main.c` (master) or `slave/main/main.c` (slave) to set your WiFi credentials:
 
 ```c
 #define WIFI_SSID  "YourNetworkName"
@@ -66,9 +87,20 @@ Edit `main/main.c` to set your WiFi credentials:
 
 Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/) v6.0 or later. Flash is 4 MB; the partition table uses two 1 MB OTA slots.
 
+### Master (ESP32)
+
 ```bash
 idf.py build
 idf.py -p COM4 flash
+```
+
+### Slave (ESP32-C6) — build from `slave/` directory
+
+```bash
+cd slave
+idf.py set-target esp32c6
+idf.py build
+idf.py -p COM3 flash
 ```
 
 > **Note:** If auto-reset fails (common when WiFi is active), enter download mode manually:
@@ -76,11 +108,20 @@ idf.py -p COM4 flash
 
 ## Web Status Page
 
-After booting, open `http://<device-ip>` in a browser. The page has three tabs:
+### Master
+
+After booting, open `http://<master-ip>` in a browser. The page has three tabs:
 
 - **Status** — firmware version, active slot, date, time, uptime, free heap. Refreshes every second automatically.
 - **OTA** — slot switcher, firmware upload, and download links.
 - **Alarm** — alarm time picker, enable checkbox, Snooze and Dismiss buttons.
+
+### Slave
+
+Open `http://<slave-ip>` in a browser. The page has two tabs:
+
+- **Status** — firmware version, active slot, uptime, free heap, and current alarm state (color-coded: orange = Armed, red = ACTIVE). Refreshes every 2 seconds.
+- **OTA** — slot switcher, firmware upload, and download links.
 
 Tab selection is preserved in the URL hash (`#status`, `#ota`, `#alarm`) so page reloads return to the same tab. Auto-refresh only runs on the Status tab and pauses when you interact with the time picker or alarm checkbox.
 
@@ -117,6 +158,8 @@ Ready-to-flash binaries are in the `releases/` folder:
 | `esp32_clock_v1.4.bin` | Alarm: GPIO14 LED + OLED inversion, web UI, NVS persistence |
 | `esp32_clock_v1.5.bin` | Snooze (5 min, web button) + physical ack button on GPIO0 |
 | `esp32_clock_v1.6.bin` | Tabbed web UI (Status / OTA / Alarm); hash-based tab persistence; auto-refresh pauses on OTA/Alarm tab |
+| `esp32_clock_v1.7.bin` | ESP-NOW alarm state broadcast to slave device (Off / Armed / Active) |
+| `esp32_slave_v1.0.bin` | Slave firmware for ESP32-C6; receives alarm state via ESP-NOW, blinks GPIO15 LED when active |
 
 ## Dependencies
 

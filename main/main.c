@@ -19,6 +19,7 @@
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_now.h"
 
 #define WIFI_SSID           "EinebuNest"
 #define WIFI_PASS           "LunRibbe"
@@ -40,6 +41,11 @@ static EventGroupHandle_t s_wifi_event_group;
 static i2c_master_bus_handle_t bus_handle;
 static i2c_master_dev_handle_t oled_handle;
 static esp_ip4_addr_t s_ip_addr = {0};
+
+typedef enum { ALARM_STATE_OFF = 0, ALARM_STATE_ARMED = 1, ALARM_STATE_ACTIVE = 2 } alarm_state_t;
+typedef struct { uint8_t state; } __attribute__((packed)) alarm_msg_t;
+
+static const uint8_t ESPNOW_BROADCAST[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
 /* Alarm state — written from main task and HTTP task; bool/uint8 writes are atomic on Xtensa */
 static volatile uint8_t  alarm_hour    = 7;
@@ -165,6 +171,28 @@ static void alarm_save_nvs(void) {
     nvs_set_u8(h, "alm_en", alarm_enabled);
     nvs_commit(h);
     nvs_close(h);
+}
+
+/* ── ESP-NOW ──────────────────────────────────────────────────────────── */
+
+static alarm_state_t compute_alarm_state(void) {
+    if (alarm_active) return ALARM_STATE_ACTIVE;
+    if (alarm_enabled || snooze_until != 0) return ALARM_STATE_ARMED;
+    return ALARM_STATE_OFF;
+}
+
+static void espnow_broadcast(alarm_state_t state) {
+    alarm_msg_t msg = {.state = (uint8_t)state};
+    esp_now_send(ESPNOW_BROADCAST, (uint8_t *)&msg, sizeof(msg));
+}
+
+static void espnow_init(void) {
+    ESP_ERROR_CHECK(esp_now_init());
+    esp_now_peer_info_t peer = {0};
+    memcpy(peer.peer_addr, ESPNOW_BROADCAST, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+    ESP_ERROR_CHECK(esp_now_add_peer(&peer));
 }
 
 /* ── LED task (GPIO14, 1s period when alarm active) ───────────────────── */
@@ -525,6 +553,7 @@ static esp_err_t alarm_set_handler(httpd_req_t *req) {
     alarm_enabled = (httpd_query_key_value(buf, "enabled", val, sizeof(val)) == ESP_OK &&
                      atoi(val) != 0) ? 1 : 0;
     alarm_save_nvs();
+    espnow_broadcast(compute_alarm_state());
     ESP_LOGI(TAG, "Alarm set: %02d:%02d enabled=%d", alarm_hour, alarm_min, alarm_enabled);
 
     httpd_resp_set_type(req, "text/plain");
@@ -536,6 +565,7 @@ static esp_err_t dismiss_handler(httpd_req_t *req) {
     alarm_active = false;
     snooze_until = 0;
     gpio_set_level(LED_GPIO, 0);
+    espnow_broadcast(compute_alarm_state());
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_sendstr(req, "Alarm dismissed");
     return ESP_OK;
@@ -545,6 +575,7 @@ static esp_err_t snooze_handler(httpd_req_t *req) {
     alarm_active = false;
     snooze_until = time(NULL) + SNOOZE_DURATION_S;
     gpio_set_level(LED_GPIO, 0);
+    espnow_broadcast(compute_alarm_state());
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_sendstr(req, "Snoozed for 5 minutes");
     return ESP_OK;
@@ -755,10 +786,13 @@ void app_main(void) {
     oled_flush();
 
     wifi_init();
+    espnow_init();
     time_init();
     webserver_init();
 
     time_t last_alarm_trigger = 0;
+    alarm_state_t prev_espnow_state = ALARM_STATE_OFF;
+    int heartbeat_ticks = 0;
 
     while (1) {
         time_t now = time(NULL);
@@ -788,6 +822,14 @@ void app_main(void) {
         if (alarm_active && (uint32_t)(now) - alarm_since_s >= ALARM_AUTO_STOP_S) {
             alarm_active = false;
             ESP_LOGI(TAG, "Alarm auto-stopped");
+        }
+
+        /* Broadcast alarm state on change or every 30 s (slave heartbeat) */
+        alarm_state_t cur_espnow_state = compute_alarm_state();
+        if (cur_espnow_state != prev_espnow_state || --heartbeat_ticks <= 0) {
+            espnow_broadcast(cur_espnow_state);
+            prev_espnow_state = cur_espnow_state;
+            heartbeat_ticks = 30;
         }
 
         oled_clear();

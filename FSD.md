@@ -8,6 +8,8 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 
 ## 2. Hardware
 
+### Master
+
 | Component | Detail |
 |-----------|--------|
 | MCU | ESP32 (ESP32-D0WDQ6) |
@@ -18,6 +20,14 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 | I2C speed | 400 kHz (fast mode) |
 | Alarm LED | GPIO 14 (external LED + resistor to GND) |
 | Ack button | GPIO 0 (BOOT button, active-low, internal pull-up) |
+| Power | 3.3 V |
+
+### Slave
+
+| Component | Detail |
+|-----------|--------|
+| MCU | ESP32-C6 |
+| Alarm LED | GPIO 15 |
 | Power | 3.3 V |
 
 ---
@@ -223,7 +233,30 @@ Free heap: 211240 B
 
 ---
 
-## 10. Known Limitations
+## 10. ESP-NOW Slave
+
+### 10.1 Overview
+
+A companion ESP32-C6 slave device receives alarm state from the master via ESP-NOW broadcast and mirrors the alarm visually with a GPIO15 LED. The slave runs its own independent firmware (`slave/`) with OTA update capability.
+
+### 10.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| F-SLAVE-01 | The master shall initialize ESP-NOW after WiFi connects and register the broadcast peer (`FF:FF:FF:FF:FF:FF`). |
+| F-SLAVE-02 | The master shall broadcast a 1-byte alarm state packet whenever the alarm state changes: `0` = Off, `1` = Armed, `2` = Active. |
+| F-SLAVE-03 | The master shall also broadcast the current alarm state every 30 seconds as a heartbeat, so a slave that reboots re-syncs without waiting for a state change. |
+| F-SLAVE-04 | The slave shall register an ESP-NOW receive callback and update its local alarm state variable on each valid packet. |
+| F-SLAVE-05 | While the slave's alarm state is Active, its GPIO15 LED shall flash with a 500 ms on / 500 ms off period, driven by a dedicated FreeRTOS task. |
+| F-SLAVE-06 | When the alarm state transitions away from Active, the slave LED shall turn off immediately. |
+| F-SLAVE-07 | The slave shall expose an HTTP server on port 80 with a Status tab (firmware version, slot, uptime, free heap, alarm state) and an OTA tab (upload, slot switching, download). |
+| F-SLAVE-08 | The slave alarm state shall be color-coded on the status page: orange for Armed, red for Active, no color for Off. |
+| F-SLAVE-09 | The slave shall support OTA firmware update via POST to `/update`, slot switching via POST to `/boot?slot=<0\|1>`, and firmware download via GET `/download?slot=<0\|1>`. |
+| F-SLAVE-10 | The slave project (`slave/`) shall be a standalone IDF project targeting `esp32c6` with its own `partitions.csv` (two 1 MB OTA slots) and `sdkconfig.defaults`. |
+
+---
+
+## 11. Known Limitations
 
 | ID | Description |
 |----|-------------|
