@@ -19,6 +19,7 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - **Alarm:** configurable daily alarm via web UI — GPIO14 LED flashes (1 s period) and OLED inverts; persisted in NVS; auto-silences after 60 s or on manual Dismiss
 - **Snooze:** web **Snooze 5 min** button re-fires the alarm after 5 minutes; status shows `Snoozed — rings at HH:MM`
 - **Physical ack button:** press GPIO0 (BOOT button) to instantly dismiss the alarm without opening the web UI
+- **Tabbed web UI:** Status / OTA / Alarm tabs with URL-hash persistence; auto-refresh only runs on the Status tab to prevent disruptive reloads while interacting with OTA or Alarm controls
 
 ## Hardware
 
@@ -75,17 +76,13 @@ idf.py -p COM4 flash
 
 ## Web Status Page
 
-After booting, open `http://<device-ip>` in a browser. The page shows:
+After booting, open `http://<device-ip>` in a browser. The page has three tabs:
 
-```
-Firmware: v1.2
-Slot:     ota_0
-Date:     30.06.2026
-Time:     12:34:56
-Uptime:   00:05:32
-```
+- **Status** — firmware version, active slot, date, time, uptime, free heap. Refreshes every second automatically.
+- **OTA** — slot switcher, firmware upload, and download links.
+- **Alarm** — alarm time picker, enable checkbox, Snooze and Dismiss buttons.
 
-The page refreshes automatically every second. Refreshing stops when a file is selected for upload.
+Tab selection is preserved in the URL hash (`#status`, `#ota`, `#alarm`) so page reloads return to the same tab. Auto-refresh only runs on the Status tab and pauses when you interact with the time picker or alarm checkbox.
 
 ## OTA — Uploading New Firmware
 
@@ -119,6 +116,7 @@ Ready-to-flash binaries are in the `releases/` folder:
 | `esp32_clock_v1.3.bin` | OLED shows firmware version alongside IP address |
 | `esp32_clock_v1.4.bin` | Alarm: GPIO14 LED + OLED inversion, web UI, NVS persistence |
 | `esp32_clock_v1.5.bin` | Snooze (5 min, web button) + physical ack button on GPIO0 |
+| `esp32_clock_v1.6.bin` | Tabbed web UI (Status / OTA / Alarm); hash-based tab persistence; auto-refresh pauses on OTA/Alarm tab |
 
 ## Dependencies
 

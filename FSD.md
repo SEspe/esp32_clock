@@ -160,10 +160,14 @@ The system exposes an HTTP server on port 80, accessible from any device on the 
 | F-WEB-02 | Serve a status page at `/` displaying firmware version, active OTA slot, current date, current time, and uptime. |
 | F-WEB-03 | The firmware version shall be derived from the ESP-IDF app description (`esp_app_get_description()`), matching the git-based version shown in boot logs. |
 | F-WEB-04 | Date and time displayed on the web page shall use the same Norwegian timezone (CET/CEST) as the OLED. |
-| F-WEB-05 | The page shall refresh automatically every second via JavaScript `setInterval`. |
+| F-WEB-05 | The page shall auto-refresh every second via JavaScript, but only while the **Status** tab is active; switching tabs pauses refresh to avoid disrupting user interaction. |
 | F-WEB-06 | The status page shall display the current free heap in bytes via `esp_get_free_heap_size()`. |
+| F-WEB-07 | The page shall be organised into three tabs: **Status**, **OTA**, and **Alarm**. |
+| F-WEB-08 | The active tab shall be stored in the URL hash (`#status`, `#ota`, `#alarm`) and restored on page reload so the user returns to the same tab. |
+| F-WEB-09 | The response shall be sent as chunked HTTP (`httpd_resp_send_chunk`) to avoid a single large static buffer; each logical section (head, Status tab, OTA tab, Alarm tab, JavaScript) is sent as a separate chunk. |
+| F-WEB-10 | The time picker (`<input type="time">`) and the Enabled checkbox on the Alarm tab shall each call `stopRefresh()` on focus/click to prevent the page from reloading while the user is editing alarm settings. |
 
-### 9.2 Status Page Format
+### 9.2 Status Tab Format
 
 ```
 Firmware: v1.2
