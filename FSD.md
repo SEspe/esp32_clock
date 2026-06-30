@@ -17,6 +17,7 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 | SCL | GPIO 4 |
 | I2C speed | 400 kHz (fast mode) |
 | Alarm LED | GPIO 14 (external LED + resistor to GND) |
+| Ack button | GPIO 0 (BOOT button, active-low, internal pull-up) |
 | Power | 3.3 V |
 
 ---
@@ -64,7 +65,10 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 | F-ALM-05 | The alarm shall auto-silence after 60 seconds if not dismissed. |
 | F-ALM-06 | The user shall be able to dismiss the alarm immediately via a **Dismiss** button on the web page; the LED is turned off immediately on dismiss. |
 | F-ALM-07 | The alarm shall fire at most once per alarm time event (de-bounced by tracking the last trigger timestamp; re-arm requires ≥ 60 s gap). |
-| F-ALM-08 | The web page shall display the current alarm status: **Off** (disabled), **Armed** (enabled, not firing), or **ACTIVE** (currently ringing). |
+| F-ALM-08 | The web page shall display the current alarm status: **Off** (disabled), **Armed** (enabled, not firing), **Snoozed — rings at HH:MM** (snooze pending), or **ACTIVE** (currently ringing). |
+| F-ALM-09 | The user shall be able to snooze the alarm via a web **Snooze 5 min** button; the alarm silences immediately and re-fires after 300 seconds. |
+| F-ALM-10 | Dismissing the alarm (web Dismiss or physical button) shall also cancel any pending snooze. |
+| F-ALM-11 | A physical ack button on GPIO0 (BOOT button, active-low, internal pull-up) shall dismiss the alarm and cancel any pending snooze without requiring the web UI; debounced at 2 × 50 ms consecutive polls. |
 
 ---
 
@@ -200,7 +204,8 @@ Free heap: 211240 B
 | F-WEB-ALM-02 | The section shall include a `<input type="time">` pre-filled with the saved alarm time and an **Enabled** checkbox. |
 | F-WEB-ALM-03 | Clicking **Set** shall POST to `/alarm` with `hour`, `min`, and `enabled` fields; the server saves to NVS and responds with `text/plain`. |
 | F-WEB-ALM-04 | A **Dismiss** button shall POST to `/dismiss`; the button is disabled when no alarm is active. |
-| F-WEB-ALM-05 | Both Set and Dismiss actions shall stop the auto-refresh timer and reload the page after the response is received. |
+| F-WEB-ALM-05 | A **Snooze 5 min** button shall POST to `/snooze`; the button is disabled when no alarm is active. |
+| F-WEB-ALM-06 | Set, Snooze, and Dismiss actions shall stop the auto-refresh timer and reload the page after the response is received. |
 
 ### 9.4 OTA Slot Switching
 

@@ -17,6 +17,8 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - OTA slot switching: boot either installed firmware version from the web page
 - Firmware download: save any installed slot's binary directly from the web page
 - **Alarm:** configurable daily alarm via web UI — GPIO14 LED flashes (1 s period) and OLED inverts; persisted in NVS; auto-silences after 60 s or on manual Dismiss
+- **Snooze:** web **Snooze 5 min** button re-fires the alarm after 5 minutes; status shows `Snoozed — rings at HH:MM`
+- **Physical ack button:** press GPIO0 (BOOT button) to instantly dismiss the alarm without opening the web UI
 
 ## Hardware
 
@@ -27,6 +29,7 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 | SDA | GPIO 5 |
 | SCL | GPIO 4 |
 | Alarm LED | GPIO 14 (external LED + resistor to GND) |
+| Ack button | GPIO 0 (BOOT button, active-low, internal pull-up) |
 
 ## Wiring
 
@@ -42,6 +45,11 @@ ESP32          LED
 -----          ---
 GPIO14  →     Anode (via ~330 Ω resistor)
 GND     →     Cathode
+
+ESP32          Button
+-----          ------
+GPIO0   →     One leg
+GND     →     Other leg   (internal pull-up; press = active low)
 ```
 
 ## Configuration
@@ -110,6 +118,7 @@ Ready-to-flash binaries are in the `releases/` folder:
 | `esp32_clock_v1.2.bin` | Adds free heap, download links, mobile file picker |
 | `esp32_clock_v1.3.bin` | OLED shows firmware version alongside IP address |
 | `esp32_clock_v1.4.bin` | Alarm: GPIO14 LED + OLED inversion, web UI, NVS persistence |
+| `esp32_clock_v1.5.bin` | Snooze (5 min, web button) + physical ack button on GPIO0 |
 
 ## Dependencies
 
