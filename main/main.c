@@ -229,12 +229,14 @@ static esp_err_t root_handler(httpd_req_t *req) {
     const char *b0 = (running == p0) ? "disabled" : "";
     const char *b1 = (running == p1) ? "disabled" : "";
 
+    const char *slot_label = running ? running->label : "?";
+
     char body[2048];
     snprintf(body, sizeof(body),
         "<!DOCTYPE html><html><head>"
         "<style>body{font-family:monospace;padding:20px}</style>"
         "</head><body>"
-        "<pre>Firmware: %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"</pre>"
+        "<pre>Firmware: %s\nSlot:     %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"</pre>"
         "<hr><h3>Installed slots</h3>"
         "<p>ota_0: %s%s <button %s onclick=\"boot(0)\">Boot this</button></p>"
         "<p>ota_1: %s%s <button %s onclick=\"boot(1)\">Boot this</button></p>"
@@ -261,7 +263,7 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "document.getElementById('st').textContent=await r.text();"
         "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
         "</script></body></html>",
-        desc->version, date, tim, up_h, up_m, up_s,
+        desc->version, slot_label, date, tim, up_h, up_m, up_s,
         v0, r0, b0, v1, r1, b1);
 
     httpd_resp_set_type(req, "text/html");
