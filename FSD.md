@@ -1,8 +1,10 @@
-# Functional Specification Document — ESP32 NTP Clock
+# Functional Specification Document — ESP32 NTP Clock with Alarm and with slave to display AlarmState
 
 ## 1. Overview
 
-A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, and displays the current Norwegian local time on an SSD1306 OLED display. No RTOS abstractions beyond FreeRTOS task delays; no external libraries beyond ESP-IDF.
+A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, and displays the current Norwegian local time on an SSD1306 OLED display. 
+No RTOS abstractions beyond FreeRTOS task delays; no external libraries beyond ESP-IDF.
+A separate slave ESP32  connected with ESPNOW  ,  displaying alarmstate on led
 
 ---
 
