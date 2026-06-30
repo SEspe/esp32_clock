@@ -208,7 +208,7 @@ static esp_err_t root_handler(httpd_req_t *req) {
     uint32_t uptime_s = esp_timer_get_time() / 1000000;
     uint32_t up_h = uptime_s / 3600, up_m = (uptime_s % 3600) / 60, up_s = uptime_s % 60;
 
-    char body[1024];
+    char body[2048];
     snprintf(body, sizeof(body),
         "<!DOCTYPE html><html><head>"
         "<meta http-equiv=\"refresh\" content=\"1\">"
@@ -216,14 +216,18 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "</head><body>"
         "<pre>Firmware: %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"</pre>"
         "<hr><h3>Firmware Update (OTA)</h3>"
-        "<input type=\"file\" id=\"fw\" accept=\".bin\">"
+        "<input type=\"file\" id=\"fw\">"
         "<button onclick=\"upload()\">Upload &amp; Reboot</button>"
         "<div id=\"st\"></div>"
         "<script>"
+        "document.getElementById('fw').onchange=function(){"
+        "if(this.files[0]){"
+        "var m=document.querySelector('meta[http-equiv=\"refresh\"]');"
+        "if(m)m.remove();}};"
         "async function upload(){"
         "const f=document.getElementById('fw').files[0];"
-        "if(!f){alert('Select a .bin file');return;}"
-        "document.getElementById('st').textContent='Uploading...';"
+        "if(!f){document.getElementById('st').textContent='Select a .bin file first';return;}"
+        "document.getElementById('st').textContent='Uploading '+f.name+'...';"
         "try{"
         "const r=await fetch('/update',{method:'POST',body:f,"
         "headers:{'Content-Type':'application/octet-stream'}});"
