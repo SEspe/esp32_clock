@@ -30,6 +30,7 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 | F-WIFI-02 | Automatically reconnect on disconnect without rebooting. |
 | F-WIFI-03 | Expose the assigned IPv4 address to the display layer as soon as DHCP completes. |
 | F-WIFI-04 | Wait up to 60 seconds for initial connection before proceeding; if no IP is obtained, display `0.0.0.0`. |
+| F-WIFI-05 | Disable WiFi modem sleep after connecting to ensure the web server remains reachable at all times. |
 
 ### 3.2 Time Synchronization
 
@@ -122,48 +123,58 @@ idf.py -p COM4 flash monitor
 
 If auto-reset fails (common when WiFi is active):
 
-1. Unplug USB
-2. Hold BOOT button
-3. Plug USB back in
-4. Wait 2 seconds, release BOOT
-5. Flash with `--before no-reset`
+1. Hold BOOT button
+2. Press and release EN/RST button
+3. Release BOOT button
+4. Flash with `--before no-reset`
 
 ---
 
 ## 9. Web Server
 
-The system shall expose an HTTP server on port 80, accessible from any device on the local network, showing live device status.
+The system exposes an HTTP server on port 80, accessible from any device on the local network, showing live device status and providing OTA firmware management.
 
 ### 9.1 Requirements
 
 | ID | Requirement |
 |----|-------------|
 | F-WEB-01 | Start an HTTP server on port 80 after WiFi connects. |
-| F-WEB-02 | Serve a single status page at `/` displaying the firmware version, current date, and current time. |
+| F-WEB-02 | Serve a status page at `/` displaying firmware version, active OTA slot, current date, current time, and uptime. |
 | F-WEB-03 | The firmware version shall be derived from the ESP-IDF app description (`esp_app_get_description()`), matching the git-based version shown in boot logs. |
 | F-WEB-04 | Date and time displayed on the web page shall use the same Norwegian timezone (CET/CEST) as the OLED. |
-| F-WEB-05 | The page shall refresh automatically every second. |
+| F-WEB-05 | The page shall refresh automatically every second via JavaScript `setInterval`. |
 
-### 9.2 Response Format
-
-The status page shall return `Content-Type: text/html` with a minimal HTML body, for example:
+### 9.2 Status Page Format
 
 ```
-Firmware: v1.0
+Firmware: v1.2
+Slot:     ota_0
 Date:     30.06.2026
 Time:     12:34:56
+Uptime:   00:05:32
 ```
 
-### 9.3 OTA Firmware Update
+### 9.3 OTA Firmware Upload
 
 | ID | Requirement |
 |----|-------------|
 | F-OTA-01 | The status page shall include a file-picker and "Upload & Reboot" button for OTA firmware update. |
-| F-OTA-02 | Clicking the button shall POST the selected `.bin` file to `/update` as `application/octet-stream`. |
-| F-OTA-03 | The `/update` handler shall write the received binary to the inactive OTA partition using `esp_ota_write`. |
-| F-OTA-04 | On success, the handler shall call `esp_ota_set_boot_partition` and reboot after 1 second. |
-| F-OTA-05 | On any error (no OTA partition, write failure, receive error), the handler shall return HTTP 500 with a plain-text description and abort the OTA handle. |
-| F-OTA-06 | The partition table shall provide two equally-sized OTA slots (`ota_0` / `ota_1`, 1 MB each) on 4 MB flash, with no factory partition. |
+| F-OTA-02 | When a file is selected, the JavaScript page-refresh timer shall be cancelled so the file selection is not cleared. |
+| F-OTA-03 | Clicking the button shall POST the selected `.bin` file to `/update` as `application/octet-stream`. |
+| F-OTA-04 | The `/update` handler shall write the received binary to the inactive OTA partition using `esp_ota_write`. |
+| F-OTA-05 | On success, the handler shall call `esp_ota_set_boot_partition` and reboot after 1 second. |
+| F-OTA-06 | On any error (no OTA partition, write failure, receive error), the handler shall return HTTP 500 with a plain-text description and abort the OTA handle. |
+| F-OTA-07 | The partition table shall provide two equally-sized OTA slots (`ota_0` / `ota_1`, 1 MB each) on 4 MB flash, with no factory partition. |
+
+### 9.4 OTA Slot Switching
+
+| ID | Requirement |
+|----|-------------|
+| F-SLOT-01 | The status page shall display an "Installed slots" section listing both OTA partitions with their firmware version. |
+| F-SLOT-02 | Each slot entry shall include a "Boot this" button that switches the active boot partition and reboots immediately. |
+| F-SLOT-03 | The button for the currently-running slot shall be disabled. |
+| F-SLOT-04 | Slot switching shall be handled by a POST to `/boot?slot=<0|1>`, which calls `esp_ota_set_boot_partition` and reboots after 1 second. |
+| F-SLOT-05 | If a slot contains no valid firmware, its version shall be shown as `(empty)` and the button shall still render (the partition check is deferred to the boot loader). |
 
 ---
 
@@ -171,7 +182,8 @@ Time:     12:34:56
 
 | ID | Description |
 |----|-------------|
-| L-01 | WiFi credentials are compiled into the binary; no runtime configuration or OTA update support. |
+| L-01 | WiFi credentials are compiled into the binary; no runtime configuration. |
 | L-02 | No graceful handling if NTP never syncs after initial boot (display stays at `--:--:--` indefinitely). |
 | L-03 | Single NTP server; no fallback. |
 | L-04 | Display I2C address is hardcoded to `0x3C`; boards with `0x3D` require a source change. |
+| L-05 | The web server HTTP stack size is 8 kB; uploading firmware larger than ~850 kB may require increasing `config.stack_size`. |

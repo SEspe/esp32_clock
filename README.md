@@ -11,8 +11,9 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - Shows `--:--:--` / `--.--.----` while waiting for NTP sync
 - Shows `0.0.0.0` if WiFi is not connected
 - Correct Norwegian timezone (UTC+1 CET in winter, auto-switches to UTC+2 CEST in summer)
-- HTTP status page on port 80: firmware version, date, time
+- HTTP status page on port 80: firmware version, active OTA slot, date, time, uptime
 - OTA firmware update via the web page (no USB required after initial flash)
+- OTA slot switching: boot either installed firmware version from the web page
 
 ## Hardware
 
@@ -55,14 +56,38 @@ idf.py -p COM4 flash
 > **Note:** If auto-reset fails (common when WiFi is active), enter download mode manually:
 > hold BOOT → press and release EN/RST → release BOOT → then run the flash command.
 
-## OTA Update
+## Web Status Page
 
-After the initial USB flash, subsequent updates can be uploaded over WiFi:
+After booting, open `http://<device-ip>` in a browser. The page shows:
+
+```
+Firmware: v1.2
+Slot:     ota_0
+Date:     30.06.2026
+Time:     12:34:56
+Uptime:   00:05:32
+```
+
+The page refreshes automatically every second. Refreshing stops when a file is selected for upload.
+
+## OTA — Uploading New Firmware
 
 1. Build the new firmware: `idf.py build` → produces `build/esp32_clock.bin`
-2. Open `http://<device-ip>` in a browser (device on same network)
-3. Pick `esp32_clock.bin` with the file picker and click **Upload & Reboot**
-4. The device writes the image to the inactive OTA slot, sets it as the boot target, and reboots automatically
+2. Open `http://<device-ip>` in a browser
+3. Select `esp32_clock.bin` with the file picker and click **Upload & Reboot**
+4. The device writes the image to the inactive OTA slot, sets it as the boot target, and reboots
+
+## OTA — Switching Between Installed Versions
+
+The **Installed slots** section on the web page shows both OTA partitions with their firmware versions:
+
+```
+Installed slots
+ota_0: v1.1   [Boot this]
+ota_1: v1.2   [Boot this]  ← running
+```
+
+Click **Boot this** next to any slot to switch to that version immediately — no file upload needed. The currently-running slot's button is disabled.
 
 ## Dependencies
 
@@ -74,3 +99,6 @@ All dependencies are part of ESP-IDF. The following components are used:
 - `esp_netif` — network interface
 - `esp_driver_i2c` — I2C master driver (new API)
 - `lwip` — TCP/IP stack (NTP via SNTP)
+- `esp_http_server` — HTTP server
+- `app_update` — OTA update API
+- `esp_timer` — uptime counter
