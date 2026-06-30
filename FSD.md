@@ -48,10 +48,9 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 | F-DISP-01 | Drive SSD1306 directly via the ESP-IDF new I2C master API; no third-party display library. |
 | F-DISP-02 | Render characters from a built-in 5×7 pixel font with configurable integer scale. |
 | F-DISP-03 | Show the current time in 24-hour format (`HH:MM:SS`) centered horizontally, scaled ×2, starting at page 3. |
-| F-DISP-04 | Show the device IP address in the top-left corner at scale ×1 (page 0). |
+| F-DISP-04 | Show the device IP address and installed firmware version on page 0 at scale ×1, e.g. `192.168.86.147 v1.2`. |
 | F-DISP-05 | Show the current date in `DD.MM.YYYY` format centered horizontally at scale ×1 (page 1). |
 | F-DISP-06 | Refresh the display once per second. |
-| F-DISP-07 | On startup, run a brief checkerboard test pattern (alternating 0xFF / 0x00 pages, 1 second) to verify the display is alive. |
 
 ---
 
@@ -70,7 +69,7 @@ A bare-metal ESP32 firmware that connects to WiFi, synchronizes time via NTP, an
 
 ```
 ┌────────────────────────────────┐  ← 128 px wide
-│ 192.168.1.42          page 0  │  ← IP, scale 1 (7 px tall)
+│ 192.168.86.147 v1.2   page 0  │  ← IP + version, scale 1 (7 px tall)
 │       30.06.2026      page 1  │  ← Date, scale 1 (7 px tall)
 │                        page 2  │
 │     12:34:56          page 3  │  ← Time, scale 2 (14 px tall)
