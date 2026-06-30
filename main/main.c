@@ -30,8 +30,10 @@
 #define OLED_W      128
 #define PAGES       8
 
-#define LED_GPIO    14
+#define LED_GPIO           14
+#define ACK_BTN_GPIO       0        /* BOOT button — press to dismiss/ack alarm */
 #define ALARM_AUTO_STOP_S  60
+#define SNOOZE_DURATION_S  (5 * 60)
 
 static const char *TAG = "clock";
 static EventGroupHandle_t s_wifi_event_group;
@@ -45,6 +47,7 @@ static volatile uint8_t  alarm_min     = 0;
 static volatile uint8_t  alarm_enabled = 0;
 static volatile bool     alarm_active  = false;
 static volatile uint32_t alarm_since_s = 0;
+static volatile time_t   snooze_until  = 0;
 
 /* 5×7 font, column-encoded (LSB = top pixel). Index: '0'-'9'=0-9, ':'=10, ' '=11, '-'=12, '.'=13, 'v'=14 */
 static const uint8_t font[][5] = {
@@ -168,14 +171,37 @@ static void alarm_save_nvs(void) {
 
 static void led_task(void *arg) {
     bool state = false;
+    int  btn_low = 0;
+    uint32_t led_ms = 0;
+
     while (1) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        led_ms += 50;
+
+        /* Physical ack button: two consecutive 50 ms polls low = acknowledge */
+        if (gpio_get_level(ACK_BTN_GPIO) == 0) {
+            if (++btn_low >= 2 && alarm_active) {
+                alarm_active = false;
+                snooze_until = 0;
+                gpio_set_level(LED_GPIO, 0);
+                state  = false;
+                led_ms = 0;
+                btn_low = 0;
+            }
+        } else {
+            btn_low = 0;
+        }
+
+        /* LED: toggle every 500 ms while alarm active */
         if (alarm_active) {
-            state = !state;
-            gpio_set_level(LED_GPIO, state);
-            vTaskDelay(pdMS_TO_TICKS(500));
+            if (led_ms >= 500) {
+                state = !state;
+                gpio_set_level(LED_GPIO, state);
+                led_ms = 0;
+            }
         } else {
             if (state) { gpio_set_level(LED_GPIO, 0); state = false; }
-            vTaskDelay(pdMS_TO_TICKS(100));
+            led_ms = 0;
         }
     }
 }
@@ -324,10 +350,23 @@ static esp_err_t root_handler(httpd_req_t *req) {
     uint32_t free_heap = esp_get_free_heap_size();
 
     /* snapshot volatile alarm state once */
-    uint8_t a_h   = alarm_hour;
-    uint8_t a_m   = alarm_min;
-    uint8_t a_en  = alarm_enabled;
-    bool    a_act = alarm_active;
+    uint8_t a_h    = alarm_hour;
+    uint8_t a_m    = alarm_min;
+    uint8_t a_en   = alarm_enabled;
+    bool    a_act  = alarm_active;
+    time_t  s_until = snooze_until;
+
+    char alarm_status[48];
+    if (a_act) {
+        snprintf(alarm_status, sizeof(alarm_status), "ACTIVE");
+    } else if (s_until != 0) {
+        struct tm st;
+        localtime_r(&s_until, &st);
+        snprintf(alarm_status, sizeof(alarm_status), "Snoozed &mdash; rings at %02d:%02d",
+                 st.tm_hour, st.tm_min);
+    } else {
+        snprintf(alarm_status, sizeof(alarm_status), "%s", a_en ? "Armed" : "Off");
+    }
 
     static char body[4096];
     snprintf(body, sizeof(body),
@@ -349,6 +388,8 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "<input type=\"time\" id=\"at\" value=\"%02d:%02d\">"
         " <label><input type=\"checkbox\" id=\"aen\" %s> Enabled</label>"
         " <button onclick=\"setAlarm()\">Set</button>"
+        "<br><br>"
+        "<button id=\"snz\" onclick=\"snoozeAlarm()\" %s>Snooze 5 min</button>"
         " <button id=\"disc\" onclick=\"dismissAlarm()\" %s>Dismiss</button>"
         "<div id=\"ast\"></div>"
         "<script>"
@@ -383,6 +424,11 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "headers:{'Content-Type':'application/x-www-form-urlencoded'}});"
         "document.getElementById('ast').textContent=await r.text();"
         "setTimeout(()=>location.reload(),800);}"
+        "async function snoozeAlarm(){"
+        "clearInterval(tmr);"
+        "const r=await fetch('/snooze',{method:'POST'});"
+        "document.getElementById('ast').textContent=await r.text();"
+        "setTimeout(()=>location.reload(),500);}"
         "async function dismissAlarm(){"
         "clearInterval(tmr);"
         "const r=await fetch('/dismiss',{method:'POST'});"
@@ -391,9 +437,10 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "</script></body></html>",
         desc->version, slot_label, date, tim, up_h, up_m, up_s, free_heap,
         v0, r0, b0, v1, r1, b1,
-        a_act ? "ACTIVE" : (a_en ? "Armed" : "Off"),
+        alarm_status,
         a_h, a_m,
         a_en ? "checked" : "",
+        a_act ? "" : "disabled",
         a_act ? "" : "disabled");
 
     httpd_resp_set_type(req, "text/html");
@@ -431,9 +478,19 @@ static esp_err_t alarm_set_handler(httpd_req_t *req) {
 
 static esp_err_t dismiss_handler(httpd_req_t *req) {
     alarm_active = false;
+    snooze_until = 0;
     gpio_set_level(LED_GPIO, 0);
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_sendstr(req, "Alarm dismissed");
+    return ESP_OK;
+}
+
+static esp_err_t snooze_handler(httpd_req_t *req) {
+    alarm_active = false;
+    snooze_until = time(NULL) + SNOOZE_DURATION_S;
+    gpio_set_level(LED_GPIO, 0);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "Snoozed for 5 minutes");
     return ESP_OK;
 }
 
@@ -563,7 +620,7 @@ static void webserver_init(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;
-    config.max_uri_handlers  = 8;
+    config.max_uri_handlers  = 9;
 
     httpd_handle_t server;
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -577,6 +634,7 @@ static void webserver_init(void) {
     httpd_uri_t dl_uri   = { .uri = "/download", .method = HTTP_GET,  .handler = download_handler };
     httpd_uri_t alarm_uri= { .uri = "/alarm",    .method = HTTP_POST, .handler = alarm_set_handler };
     httpd_uri_t dismiss  = { .uri = "/dismiss",  .method = HTTP_POST, .handler = dismiss_handler };
+    httpd_uri_t snooze   = { .uri = "/snooze",   .method = HTTP_POST, .handler = snooze_handler };
 
     httpd_register_uri_handler(server, &root);
     httpd_register_uri_handler(server, &update);
@@ -584,6 +642,7 @@ static void webserver_init(void) {
     httpd_register_uri_handler(server, &dl_uri);
     httpd_register_uri_handler(server, &alarm_uri);
     httpd_register_uri_handler(server, &dismiss);
+    httpd_register_uri_handler(server, &snooze);
     ESP_LOGI(TAG, "Web server started on http://" IPSTR, IP2STR(&s_ip_addr));
 }
 
@@ -603,6 +662,16 @@ void app_main(void) {
     };
     gpio_config(&led_cfg);
     gpio_set_level(LED_GPIO, 0);
+
+    /* Ack button input on GPIO0 (BOOT button), active-low with internal pull-up */
+    gpio_config_t btn_cfg = {
+        .pin_bit_mask = (1ULL << ACK_BTN_GPIO),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&btn_cfg);
 
     xTaskCreate(led_task, "led", 1024, NULL, 5, NULL);
 
@@ -648,6 +717,15 @@ void app_main(void) {
             alarm_since_s = (uint32_t)(now);
             last_alarm_trigger = now;
             ESP_LOGI(TAG, "Alarm triggered");
+        }
+
+        /* Snooze re-trigger */
+        if (!alarm_active && snooze_until != 0 && now >= snooze_until) {
+            alarm_active  = true;
+            alarm_since_s = (uint32_t)(now);
+            snooze_until  = 0;
+            last_alarm_trigger = now;
+            ESP_LOGI(TAG, "Alarm re-triggered after snooze");
         }
 
         /* Auto-stop after ALARM_AUTO_STOP_S seconds */
