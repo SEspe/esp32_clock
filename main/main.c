@@ -11,7 +11,9 @@
 #include "esp_netif.h"
 #include "esp_sntp.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
@@ -28,11 +30,21 @@
 #define OLED_W      128
 #define PAGES       8
 
+#define LED_GPIO    14
+#define ALARM_AUTO_STOP_S  60
+
 static const char *TAG = "clock";
 static EventGroupHandle_t s_wifi_event_group;
 static i2c_master_bus_handle_t bus_handle;
 static i2c_master_dev_handle_t oled_handle;
 static esp_ip4_addr_t s_ip_addr = {0};
+
+/* Alarm state — written from main task and HTTP task; bool/uint8 writes are atomic on Xtensa */
+static volatile uint8_t  alarm_hour    = 7;
+static volatile uint8_t  alarm_min     = 0;
+static volatile uint8_t  alarm_enabled = 0;
+static volatile bool     alarm_active  = false;
+static volatile uint32_t alarm_since_s = 0;
 
 /* 5×7 font, column-encoded (LSB = top pixel). Index: '0'-'9'=0-9, ':'=10, ' '=11, '-'=12, '.'=13, 'v'=14 */
 static const uint8_t font[][5] = {
@@ -127,6 +139,45 @@ static void oled_test_pattern(void) {
     vTaskDelay(pdMS_TO_TICKS(1000));
     oled_clear();
     oled_flush();
+}
+
+/* ── Alarm NVS ────────────────────────────────────────────────────────── */
+
+static void alarm_load_nvs(void) {
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t v;
+    if (nvs_get_u8(h, "alm_h",  &v) == ESP_OK) alarm_hour    = v;
+    if (nvs_get_u8(h, "alm_m",  &v) == ESP_OK) alarm_min     = v;
+    if (nvs_get_u8(h, "alm_en", &v) == ESP_OK) alarm_enabled = v;
+    nvs_close(h);
+    ESP_LOGI(TAG, "Alarm loaded: %02d:%02d enabled=%d", alarm_hour, alarm_min, alarm_enabled);
+}
+
+static void alarm_save_nvs(void) {
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "alm_h",  alarm_hour);
+    nvs_set_u8(h, "alm_m",  alarm_min);
+    nvs_set_u8(h, "alm_en", alarm_enabled);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* ── LED task (GPIO14, 1s period when alarm active) ───────────────────── */
+
+static void led_task(void *arg) {
+    bool state = false;
+    while (1) {
+        if (alarm_active) {
+            state = !state;
+            gpio_set_level(LED_GPIO, state);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        } else {
+            if (state) { gpio_set_level(LED_GPIO, 0); state = false; }
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
 }
 
 /* ── WiFi ─────────────────────────────────────────────────────────────── */
@@ -272,7 +323,13 @@ static esp_err_t root_handler(httpd_req_t *req) {
     const char *slot_label = running ? running->label : "?";
     uint32_t free_heap = esp_get_free_heap_size();
 
-    char body[2048];
+    /* snapshot volatile alarm state once */
+    uint8_t a_h   = alarm_hour;
+    uint8_t a_m   = alarm_min;
+    uint8_t a_en  = alarm_enabled;
+    bool    a_act = alarm_active;
+
+    static char body[4096];
     snprintf(body, sizeof(body),
         "<!DOCTYPE html><html><head>"
         "<style>body{font-family:monospace;padding:20px}</style>"
@@ -287,6 +344,13 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "<span id=\"fn\" style=\"margin-left:8px\">No file selected</span><br><br>"
         "<button id=\"upbtn\" onclick=\"upload()\" disabled>Upload &amp; Reboot</button>"
         "<div id=\"st\"></div>"
+        "<hr><h3>Alarm</h3>"
+        "<p>Status: <b>%s</b></p>"
+        "<input type=\"time\" id=\"at\" value=\"%02d:%02d\">"
+        " <label><input type=\"checkbox\" id=\"aen\" %s> Enabled</label>"
+        " <button onclick=\"setAlarm()\">Set</button>"
+        " <button id=\"disc\" onclick=\"dismissAlarm()\" %s>Dismiss</button>"
+        "<div id=\"ast\"></div>"
         "<script>"
         "var tmr=setInterval(function(){location.reload()},1000);"
         "function pickFile(){clearInterval(tmr);document.getElementById('fw').click();}"
@@ -309,12 +373,67 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "headers:{'Content-Type':'application/octet-stream'}});"
         "document.getElementById('st').textContent=await r.text();"
         "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
+        "async function setAlarm(){"
+        "clearInterval(tmr);"
+        "const tv=document.getElementById('at').value;"
+        "const en=document.getElementById('aen').checked?1:0;"
+        "const[h,m]=tv.split(':');"
+        "const r=await fetch('/alarm',{method:'POST',"
+        "body:'hour='+h+'&min='+m+'&enabled='+en,"
+        "headers:{'Content-Type':'application/x-www-form-urlencoded'}});"
+        "document.getElementById('ast').textContent=await r.text();"
+        "setTimeout(()=>location.reload(),800);}"
+        "async function dismissAlarm(){"
+        "clearInterval(tmr);"
+        "const r=await fetch('/dismiss',{method:'POST'});"
+        "document.getElementById('ast').textContent=await r.text();"
+        "setTimeout(()=>location.reload(),500);}"
         "</script></body></html>",
         desc->version, slot_label, date, tim, up_h, up_m, up_s, free_heap,
-        v0, r0, b0, v1, r1, b1);
+        v0, r0, b0, v1, r1, b1,
+        a_act ? "ACTIVE" : (a_en ? "Armed" : "Off"),
+        a_h, a_m,
+        a_en ? "checked" : "",
+        a_act ? "" : "disabled");
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_sendstr(req, body);
+    return ESP_OK;
+}
+
+static esp_err_t alarm_set_handler(httpd_req_t *req) {
+    char buf[64] = {0};
+    int n = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (n <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
+        return ESP_FAIL;
+    }
+    buf[n] = '\0';
+
+    char val[8];
+    if (httpd_query_key_value(buf, "hour", val, sizeof(val)) == ESP_OK) {
+        int h = atoi(val);
+        if (h >= 0 && h <= 23) alarm_hour = (uint8_t)h;
+    }
+    if (httpd_query_key_value(buf, "min", val, sizeof(val)) == ESP_OK) {
+        int m = atoi(val);
+        if (m >= 0 && m <= 59) alarm_min = (uint8_t)m;
+    }
+    alarm_enabled = (httpd_query_key_value(buf, "enabled", val, sizeof(val)) == ESP_OK &&
+                     atoi(val) != 0) ? 1 : 0;
+    alarm_save_nvs();
+    ESP_LOGI(TAG, "Alarm set: %02d:%02d enabled=%d", alarm_hour, alarm_min, alarm_enabled);
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "Alarm updated");
+    return ESP_OK;
+}
+
+static esp_err_t dismiss_handler(httpd_req_t *req) {
+    alarm_active = false;
+    gpio_set_level(LED_GPIO, 0);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "Alarm dismissed");
     return ESP_OK;
 }
 
@@ -444,6 +563,7 @@ static void webserver_init(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;
+    config.max_uri_handlers  = 8;
 
     httpd_handle_t server;
     if (httpd_start(&server, &config) != ESP_OK) {
@@ -451,22 +571,19 @@ static void webserver_init(void) {
         return;
     }
 
-    httpd_uri_t root = {
-        .uri = "/", .method = HTTP_GET, .handler = root_handler,
-    };
-    httpd_uri_t update = {
-        .uri = "/update", .method = HTTP_POST, .handler = update_handler,
-    };
-    httpd_uri_t boot_uri = {
-        .uri = "/boot", .method = HTTP_POST, .handler = boot_handler,
-    };
-    httpd_uri_t dl_uri = {
-        .uri = "/download", .method = HTTP_GET, .handler = download_handler,
-    };
+    httpd_uri_t root     = { .uri = "/",        .method = HTTP_GET,  .handler = root_handler };
+    httpd_uri_t update   = { .uri = "/update",   .method = HTTP_POST, .handler = update_handler };
+    httpd_uri_t boot_uri = { .uri = "/boot",     .method = HTTP_POST, .handler = boot_handler };
+    httpd_uri_t dl_uri   = { .uri = "/download", .method = HTTP_GET,  .handler = download_handler };
+    httpd_uri_t alarm_uri= { .uri = "/alarm",    .method = HTTP_POST, .handler = alarm_set_handler };
+    httpd_uri_t dismiss  = { .uri = "/dismiss",  .method = HTTP_POST, .handler = dismiss_handler };
+
     httpd_register_uri_handler(server, &root);
     httpd_register_uri_handler(server, &update);
     httpd_register_uri_handler(server, &boot_uri);
     httpd_register_uri_handler(server, &dl_uri);
+    httpd_register_uri_handler(server, &alarm_uri);
+    httpd_register_uri_handler(server, &dismiss);
     ESP_LOGI(TAG, "Web server started on http://" IPSTR, IP2STR(&s_ip_addr));
 }
 
@@ -474,6 +591,20 @@ static void webserver_init(void) {
 
 void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init());
+    alarm_load_nvs();
+
+    /* LED output on GPIO14 */
+    gpio_config_t led_cfg = {
+        .pin_bit_mask = (1ULL << LED_GPIO),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&led_cfg);
+    gpio_set_level(LED_GPIO, 0);
+
+    xTaskCreate(led_task, "led", 1024, NULL, 5, NULL);
 
     /* I2C master bus */
     i2c_master_bus_config_t bus_cfg = {
@@ -502,10 +633,28 @@ void app_main(void) {
     time_init();
     webserver_init();
 
+    time_t last_alarm_trigger = 0;
+
     while (1) {
         time_t now = time(NULL);
         struct tm t;
         localtime_r(&now, &t);
+
+        /* Alarm trigger: fire at HH:MM:00, at most once per minute */
+        if (alarm_enabled && !alarm_active && t.tm_year >= (2020 - 1900) &&
+            t.tm_hour == alarm_hour && t.tm_min == alarm_min && t.tm_sec < 5 &&
+            (now - last_alarm_trigger) > 60) {
+            alarm_active = true;
+            alarm_since_s = (uint32_t)(now);
+            last_alarm_trigger = now;
+            ESP_LOGI(TAG, "Alarm triggered");
+        }
+
+        /* Auto-stop after ALARM_AUTO_STOP_S seconds */
+        if (alarm_active && (uint32_t)(now) - alarm_since_s >= ALARM_AUTO_STOP_S) {
+            alarm_active = false;
+            ESP_LOGI(TAG, "Alarm auto-stopped");
+        }
 
         oled_clear();
 
@@ -536,6 +685,9 @@ void app_main(void) {
             draw_string(17, 3, buf, 2);
         }
         oled_flush();
+
+        /* Invert display when alarm is active, alternating each second */
+        oled_cmd(alarm_active && (t.tm_sec % 2 == 0) ? 0xA7 : 0xA6);
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
