@@ -189,6 +189,44 @@ static void time_init(void) {
 
 /* ── Web server ───────────────────────────────────────────────────────── */
 
+/* Minimal ESP image header structs for size calculation */
+typedef struct {
+    uint8_t  magic;
+    uint8_t  segment_count;
+    uint8_t  spi_mode;
+    uint8_t  spi_speed_size;
+    uint32_t entry_addr;
+    uint8_t  wp_pin;
+    uint8_t  spi_pin_drv[3];
+    uint16_t chip_id;
+    uint8_t  min_chip_rev;
+    uint16_t min_chip_rev_full;
+    uint16_t max_chip_rev_full;
+    uint8_t  reserved[4];
+    uint8_t  hash_appended;
+} __attribute__((packed)) img_hdr_t;
+
+typedef struct {
+    uint32_t load_addr;
+    uint32_t data_len;
+} __attribute__((packed)) seg_hdr_t;
+
+static esp_err_t image_size(const esp_partition_t *part, size_t *out) {
+    img_hdr_t hdr;
+    if (esp_partition_read(part, 0, &hdr, sizeof(hdr)) != ESP_OK || hdr.magic != 0xE9)
+        return ESP_FAIL;
+    size_t off = sizeof(hdr);
+    for (int i = 0; i < hdr.segment_count; i++) {
+        seg_hdr_t seg;
+        if (esp_partition_read(part, off, &seg, sizeof(seg)) != ESP_OK) return ESP_FAIL;
+        off += sizeof(seg) + seg.data_len;
+    }
+    off += 1; /* checksum */
+    if (hdr.hash_appended) off += 32; /* SHA256 */
+    *out = off;
+    return ESP_OK;
+}
+
 static void slot_version(const esp_partition_t *part, char *out, size_t len) {
     esp_app_desc_t d;
     if (part && esp_ota_get_partition_description(part, &d) == ESP_OK)
@@ -240,8 +278,8 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "</head><body>"
         "<pre>Firmware: %s\nSlot:     %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"\nFree heap: %"PRIu32" B</pre>"
         "<hr><h3>Installed slots</h3>"
-        "<p>ota_0: %s%s <button %s onclick=\"boot(0)\">Boot this</button></p>"
-        "<p>ota_1: %s%s <button %s onclick=\"boot(1)\">Boot this</button></p>"
+        "<p>ota_0: %s%s <a href=\"/download?slot=0\">[Download]</a> <button %s onclick=\"boot(0)\">Boot this</button></p>"
+        "<p>ota_1: %s%s <a href=\"/download?slot=1\">[Download]</a> <button %s onclick=\"boot(1)\">Boot this</button></p>"
         "<hr><h3>Upload new firmware</h3>"
         "<input type=\"file\" id=\"fw\" style=\"display:none\">"
         "<button onclick=\"pickFile()\">Choose File</button>"
@@ -352,6 +390,54 @@ static esp_err_t update_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t download_handler(httpd_req_t *req) {
+    char query[16] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    char val[4];
+    int slot = 0;
+    if (httpd_query_key_value(query, "slot", val, sizeof(val)) == ESP_OK)
+        slot = atoi(val);
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP,
+        slot == 0 ? ESP_PARTITION_SUBTYPE_APP_OTA_0 : ESP_PARTITION_SUBTYPE_APP_OTA_1,
+        NULL);
+    if (!part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No partition");
+        return ESP_FAIL;
+    }
+
+    size_t img_sz = 0;
+    if (image_size(part, &img_sz) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid image");
+        return ESP_FAIL;
+    }
+
+    esp_app_desc_t app_desc;
+    char fname[64];
+    if (esp_ota_get_partition_description(part, &app_desc) == ESP_OK)
+        snprintf(fname, sizeof(fname), "esp32_clock_%s.bin", app_desc.version);
+    else
+        snprintf(fname, sizeof(fname), "esp32_clock_ota%d.bin", slot);
+
+    char disp[96];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s\"", fname);
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+
+    char buf[1024];
+    size_t off = 0;
+    while (off < img_sz) {
+        size_t n = img_sz - off;
+        if (n > sizeof(buf)) n = sizeof(buf);
+        esp_partition_read(part, off, buf, n);
+        httpd_resp_send_chunk(req, buf, n);
+        off += n;
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
 static void webserver_init(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size        = 8192;
@@ -373,9 +459,13 @@ static void webserver_init(void) {
     httpd_uri_t boot_uri = {
         .uri = "/boot", .method = HTTP_POST, .handler = boot_handler,
     };
+    httpd_uri_t dl_uri = {
+        .uri = "/download", .method = HTTP_GET, .handler = download_handler,
+    };
     httpd_register_uri_handler(server, &root);
     httpd_register_uri_handler(server, &update);
     httpd_register_uri_handler(server, &boot_uri);
+    httpd_register_uri_handler(server, &dl_uri);
     ESP_LOGI(TAG, "Web server started on http://" IPSTR, IP2STR(&s_ip_addr));
 }
 
