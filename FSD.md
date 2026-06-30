@@ -99,6 +99,7 @@ Character widths at scale ×2: each glyph is `(5+1) × 2 = 12 px` wide.
 | ` ` (space) | 11 |
 | `-` | 12 |
 | `.` | 13 |
+| `v` | 14 |
 
 ---
 

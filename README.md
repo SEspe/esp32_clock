@@ -11,9 +11,11 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - Shows `--:--:--` / `--.--.----` while waiting for NTP sync
 - Shows `0.0.0.0` if WiFi is not connected
 - Correct Norwegian timezone (UTC+1 CET in winter, auto-switches to UTC+2 CEST in summer)
-- HTTP status page on port 80: firmware version, active OTA slot, date, time, uptime
+- OLED page 0 shows IP address and firmware version together, e.g. `192.168.86.147 v1.3`
+- HTTP status page on port 80: firmware version, active OTA slot, date, time, uptime, free heap
 - OTA firmware update via the web page (no USB required after initial flash)
 - OTA slot switching: boot either installed firmware version from the web page
+- Firmware download: save any installed slot's binary directly from the web page
 
 ## Hardware
 
@@ -99,6 +101,7 @@ Ready-to-flash binaries are in the `releases/` folder:
 |------|-------------|
 | `esp32_clock_v1.1.bin` | Slot switching, uptime |
 | `esp32_clock_v1.2.bin` | Adds free heap, download links, mobile file picker |
+| `esp32_clock_v1.3.bin` | OLED shows firmware version alongside IP address |
 
 ## Dependencies
 
