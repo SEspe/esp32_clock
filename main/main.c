@@ -13,6 +13,7 @@
 #include "driver/i2c_master.h"
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
+#include "esp_ota_ops.h"
 
 #define WIFI_SSID           "EinebuNest"
 #define WIFI_PASS           "LunRibbe"
@@ -191,50 +192,116 @@ static esp_err_t root_handler(httpd_req_t *req) {
     localtime_r(&now, &t);
 
     const esp_app_desc_t *desc = esp_app_get_description();
-
-    char body[320];
+    char date[16], tim[12];
     if (t.tm_year >= (2020 - 1900)) {
-        snprintf(body, sizeof(body),
-            "<!DOCTYPE html><html><head>"
-            "<meta http-equiv=\"refresh\" content=\"1\">"
-            "</head><body><pre>"
-            "Firmware: %s\n"
-            "Date:     %02d.%02d.%04d\n"
-            "Time:     %02d:%02d:%02d"
-            "</pre></body></html>",
-            desc->version,
-            t.tm_mday, t.tm_mon + 1, t.tm_year + 1900,
-            t.tm_hour, t.tm_min, t.tm_sec);
+        snprintf(date, sizeof(date), "%02d.%02d.%04d",
+                 t.tm_mday, t.tm_mon + 1, t.tm_year + 1900);
+        snprintf(tim, sizeof(tim), "%02d:%02d:%02d",
+                 t.tm_hour, t.tm_min, t.tm_sec);
     } else {
-        snprintf(body, sizeof(body),
-            "<!DOCTYPE html><html><head>"
-            "<meta http-equiv=\"refresh\" content=\"1\">"
-            "</head><body><pre>"
-            "Firmware: %s\n"
-            "Date:     --.--.----\n"
-            "Time:     --:--:--"
-            "</pre></body></html>",
-            desc->version);
+        snprintf(date, sizeof(date), "--.--.----");
+        snprintf(tim,  sizeof(tim),  "--:--:--");
     }
+
+    char body[1024];
+    snprintf(body, sizeof(body),
+        "<!DOCTYPE html><html><head>"
+        "<meta http-equiv=\"refresh\" content=\"1\">"
+        "<style>body{font-family:monospace;padding:20px}</style>"
+        "</head><body>"
+        "<pre>Firmware: %s\nDate:     %s\nTime:     %s</pre>"
+        "<hr><h3>Firmware Update (OTA)</h3>"
+        "<input type=\"file\" id=\"fw\" accept=\".bin\">"
+        "<button onclick=\"upload()\">Upload &amp; Reboot</button>"
+        "<div id=\"st\"></div>"
+        "<script>"
+        "async function upload(){"
+        "const f=document.getElementById('fw').files[0];"
+        "if(!f){alert('Select a .bin file');return;}"
+        "document.getElementById('st').textContent='Uploading...';"
+        "try{"
+        "const r=await fetch('/update',{method:'POST',body:f,"
+        "headers:{'Content-Type':'application/octet-stream'}});"
+        "document.getElementById('st').textContent=await r.text();"
+        "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
+        "</script></body></html>",
+        desc->version, date, tim);
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_sendstr(req, body);
     return ESP_OK;
 }
 
+#define OTA_BUF_SIZE 1024
+
+static esp_err_t update_handler(httpd_req_t *req) {
+    const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
+    if (!update_part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "OTA: writing to partition %s", update_part->label);
+
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(update_part, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_FAIL;
+    }
+
+    char buf[OTA_BUF_SIZE];
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int n = httpd_req_recv(req, buf, remaining < OTA_BUF_SIZE ? remaining : OTA_BUF_SIZE);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) {
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            return ESP_FAIL;
+        }
+        err = esp_ota_write(ota_handle, buf, n);
+        if (err != ESP_OK) {
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write error");
+            return ESP_FAIL;
+        }
+        remaining -= n;
+        ESP_LOGI(TAG, "OTA: %d / %d bytes", req->content_len - remaining, req->content_len);
+    }
+
+    if (esp_ota_end(ota_handle) != ESP_OK ||
+        esp_ota_set_boot_partition(update_part) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA finalise failed");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "OTA complete — rebooting");
+    httpd_resp_sendstr(req, "Update successful — rebooting in 1 second.");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+    return ESP_OK;
+}
+
 static void webserver_init(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.stack_size        = 8192;
+    config.recv_wait_timeout = 30;
+    config.send_wait_timeout = 30;
+
     httpd_handle_t server;
     if (httpd_start(&server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start web server");
         return;
     }
+
     httpd_uri_t root = {
-        .uri     = "/",
-        .method  = HTTP_GET,
-        .handler = root_handler,
+        .uri = "/", .method = HTTP_GET, .handler = root_handler,
+    };
+    httpd_uri_t update = {
+        .uri = "/update", .method = HTTP_POST, .handler = update_handler,
     };
     httpd_register_uri_handler(server, &root);
+    httpd_register_uri_handler(server, &update);
     ESP_LOGI(TAG, "Web server started on http://" IPSTR, IP2STR(&s_ip_addr));
 }
 

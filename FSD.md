@@ -149,10 +149,21 @@ The system shall expose an HTTP server on port 80, accessible from any device on
 The status page shall return `Content-Type: text/html` with a minimal HTML body, for example:
 
 ```
-Firmware: 4eb3589
+Firmware: v1.0
 Date:     30.06.2026
 Time:     12:34:56
 ```
+
+### 9.3 OTA Firmware Update
+
+| ID | Requirement |
+|----|-------------|
+| F-OTA-01 | The status page shall include a file-picker and "Upload & Reboot" button for OTA firmware update. |
+| F-OTA-02 | Clicking the button shall POST the selected `.bin` file to `/update` as `application/octet-stream`. |
+| F-OTA-03 | The `/update` handler shall write the received binary to the inactive OTA partition using `esp_ota_write`. |
+| F-OTA-04 | On success, the handler shall call `esp_ota_set_boot_partition` and reboot after 1 second. |
+| F-OTA-05 | On any error (no OTA partition, write failure, receive error), the handler shall return HTTP 500 with a plain-text description and abort the OTA handle. |
+| F-OTA-06 | The partition table shall provide two equally-sized OTA slots (`ota_0` / `ota_1`, 1 MB each) on 4 MB flash, with no factory partition. |
 
 ---
 

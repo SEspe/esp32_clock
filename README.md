@@ -11,6 +11,8 @@ An ESP32 project that displays the current Norwegian time (CET/CEST) on an SSD13
 - Shows `--:--:--` / `--.--.----` while waiting for NTP sync
 - Shows `0.0.0.0` if WiFi is not connected
 - Correct Norwegian timezone (UTC+1 CET in winter, auto-switches to UTC+2 CEST in summer)
+- HTTP status page on port 80: firmware version, date, time
+- OTA firmware update via the web page (no USB required after initial flash)
 
 ## Hardware
 
@@ -43,7 +45,7 @@ Edit `main/main.c` to set your WiFi credentials:
 
 ## Build & Flash
 
-Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/) v6.0 or later.
+Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/) v6.0 or later. Flash is 4 MB; the partition table uses two 1 MB OTA slots.
 
 ```bash
 idf.py build
@@ -52,6 +54,15 @@ idf.py -p COM4 flash
 
 > **Note:** If auto-reset fails (common when WiFi is active), enter download mode manually:
 > hold BOOT → press and release EN/RST → release BOOT → then run the flash command.
+
+## OTA Update
+
+After the initial USB flash, subsequent updates can be uploaded over WiFi:
+
+1. Build the new firmware: `idf.py build` → produces `build/esp32_clock.bin`
+2. Open `http://<device-ip>` in a browser (device on same network)
+3. Pick `esp32_clock.bin` with the file picker and click **Upload & Reboot**
+4. The device writes the image to the inactive OTA slot, sets it as the boot target, and reboots automatically
 
 ## Dependencies
 
