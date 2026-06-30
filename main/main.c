@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -14,6 +15,7 @@
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
+#include "esp_timer.h"
 
 #define WIFI_SSID           "EinebuNest"
 #define WIFI_PASS           "LunRibbe"
@@ -203,13 +205,16 @@ static esp_err_t root_handler(httpd_req_t *req) {
         snprintf(tim,  sizeof(tim),  "--:--:--");
     }
 
+    uint32_t uptime_s = esp_timer_get_time() / 1000000;
+    uint32_t up_h = uptime_s / 3600, up_m = (uptime_s % 3600) / 60, up_s = uptime_s % 60;
+
     char body[1024];
     snprintf(body, sizeof(body),
         "<!DOCTYPE html><html><head>"
         "<meta http-equiv=\"refresh\" content=\"1\">"
         "<style>body{font-family:monospace;padding:20px}</style>"
         "</head><body>"
-        "<pre>Firmware: %s\nDate:     %s\nTime:     %s</pre>"
+        "<pre>Firmware: %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"</pre>"
         "<hr><h3>Firmware Update (OTA)</h3>"
         "<input type=\"file\" id=\"fw\" accept=\".bin\">"
         "<button onclick=\"upload()\">Upload &amp; Reboot</button>"
@@ -225,7 +230,7 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "document.getElementById('st').textContent=await r.text();"
         "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
         "</script></body></html>",
-        desc->version, date, tim);
+        desc->version, date, tim, up_h, up_m, up_s);
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_sendstr(req, body);
