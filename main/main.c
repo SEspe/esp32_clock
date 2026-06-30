@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -44,8 +45,24 @@ static esp_ip4_addr_t s_ip_addr = {0};
 
 typedef enum { ALARM_STATE_OFF = 0, ALARM_STATE_ARMED = 1, ALARM_STATE_ACTIVE = 2 } alarm_state_t;
 typedef struct { uint8_t state; } __attribute__((packed)) alarm_msg_t;
+typedef struct { uint8_t ip[4]; char version[16]; } __attribute__((packed)) slave_announce_t;
 
 static const uint8_t ESPNOW_BROADCAST[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+
+#define MAX_SLAVES 4
+typedef struct {
+    uint8_t  mac[6];
+    uint8_t  ip[4];
+    char     version[16];
+    int8_t   rssi;
+    uint8_t  channel;
+    int64_t  first_seen_us;
+    int64_t  last_seen_us;
+    bool     active;
+} slave_info_t;
+
+static slave_info_t     s_slaves[MAX_SLAVES];
+static SemaphoreHandle_t s_slaves_mutex;
 
 /* Alarm state — written from main task and HTTP task; bool/uint8 writes are atomic on Xtensa */
 static volatile uint8_t  alarm_hour    = 7;
@@ -175,6 +192,39 @@ static void alarm_save_nvs(void) {
 
 /* ── ESP-NOW ──────────────────────────────────────────────────────────── */
 
+static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+    if (len != sizeof(slave_announce_t)) return;
+    slave_announce_t ann;
+    memcpy(&ann, data, sizeof(ann));
+
+    uint8_t ch = 0;
+    wifi_second_chan_t second;
+    esp_wifi_get_channel(&ch, &second);
+    int64_t now_us = esp_timer_get_time();
+
+    if (xSemaphoreTake(s_slaves_mutex, pdMS_TO_TICKS(10)) != pdTRUE) return;
+    int found = -1, empty = -1;
+    for (int i = 0; i < MAX_SLAVES; i++) {
+        if (s_slaves[i].active && memcmp(s_slaves[i].mac, info->src_addr, 6) == 0) { found = i; break; }
+        if (!s_slaves[i].active && empty < 0) empty = i;
+    }
+    int idx = (found >= 0) ? found : empty;
+    if (idx >= 0) {
+        if (!s_slaves[idx].active) {
+            memcpy(s_slaves[idx].mac, info->src_addr, 6);
+            s_slaves[idx].first_seen_us = now_us;
+            s_slaves[idx].active = true;
+        }
+        memcpy(s_slaves[idx].ip, ann.ip, 4);
+        memset(s_slaves[idx].version, 0, sizeof(s_slaves[idx].version));
+        strncpy(s_slaves[idx].version, ann.version, sizeof(s_slaves[idx].version) - 1);
+        s_slaves[idx].rssi    = info->rx_ctrl->rssi;
+        s_slaves[idx].channel = ch;
+        s_slaves[idx].last_seen_us = now_us;
+    }
+    xSemaphoreGive(s_slaves_mutex);
+}
+
 static alarm_state_t compute_alarm_state(void) {
     if (alarm_active) return ALARM_STATE_ACTIVE;
     if (alarm_enabled || snooze_until != 0) return ALARM_STATE_ARMED;
@@ -187,7 +237,9 @@ static void espnow_broadcast(alarm_state_t state) {
 }
 
 static void espnow_init(void) {
+    s_slaves_mutex = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_recv_cb(espnow_recv_cb));
     esp_now_peer_info_t peer = {0};
     memcpy(peer.peer_addr, ESPNOW_BROADCAST, 6);
     peer.channel = 0;
@@ -413,6 +465,7 @@ static esp_err_t root_handler(httpd_req_t *req) {
          "<button class='tb' data-tab='status' onclick=\"showTab('status')\">Status</button>"
          "<button class='tb' data-tab='ota'    onclick=\"showTab('ota')\">OTA</button>"
          "<button class='tb' data-tab='alarm'  onclick=\"showTab('alarm')\">Alarm</button>"
+         "<button class='tb' data-tab='slaves' onclick=\"showTab('slaves')\">Slaves</button>"
          "</div>");
 
     /* ── Status tab ───────────────────────────────────────────────────── */
@@ -465,6 +518,63 @@ static esp_err_t root_handler(httpd_req_t *req) {
         a_act ? "" : "disabled");
     SEND(a_tab);
 
+    /* ── Slaves tab ──────────────────────────────────────────────────────── */
+    SEND("<div id='tsl' class='tc'>");
+    if (xSemaphoreTake(s_slaves_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        int64_t now_us = esp_timer_get_time();
+        bool any = false;
+        for (int i = 0; i < MAX_SLAVES; i++) {
+            if (!s_slaves[i].active) continue;
+            if (!any) {
+                SEND("<table style='border-collapse:collapse;width:100%;font-size:13px'>"
+                     "<tr style='background:#333;color:#fff'>"
+                     "<th style='padding:6px'>MAC</th>"
+                     "<th style='padding:6px'>IP</th>"
+                     "<th style='padding:6px'>RSSI</th>"
+                     "<th style='padding:6px'>Ch</th>"
+                     "<th style='padding:6px'>Version</th>"
+                     "<th style='padding:6px'>Connected</th>"
+                     "<th style='padding:6px'>Last seen</th>"
+                     "</tr>");
+                any = true;
+            }
+            int64_t conn_s = (now_us - s_slaves[i].first_seen_us) / 1000000;
+            int64_t age_s  = (now_us - s_slaves[i].last_seen_us)  / 1000000;
+            uint32_t c_h = (uint32_t)(conn_s / 3600);
+            uint32_t c_m = (uint32_t)((conn_s % 3600) / 60);
+            uint32_t c_s = (uint32_t)(conn_s % 60);
+            const char *row_bg = (i % 2 == 0) ? "#f9f9f9" : "#fff";
+            char row[384];
+            snprintf(row, sizeof(row),
+                "<tr style='background:%s;text-align:center'>"
+                "<td style='padding:5px;font-size:11px'>%02x:%02x:%02x:%02x:%02x:%02x</td>"
+                "<td style='padding:5px'>%d.%d.%d.%d</td>"
+                "<td style='padding:5px'>%d&nbsp;dBm</td>"
+                "<td style='padding:5px'>%d</td>"
+                "<td style='padding:5px'>%s</td>"
+                "<td style='padding:5px'>%02"PRIu32":%02"PRIu32":%02"PRIu32"</td>"
+                "<td style='padding:5px'>%"PRId64"&nbsp;s</td>"
+                "</tr>",
+                row_bg,
+                s_slaves[i].mac[0], s_slaves[i].mac[1], s_slaves[i].mac[2],
+                s_slaves[i].mac[3], s_slaves[i].mac[4], s_slaves[i].mac[5],
+                s_slaves[i].ip[0],  s_slaves[i].ip[1],
+                s_slaves[i].ip[2],  s_slaves[i].ip[3],
+                s_slaves[i].rssi,
+                s_slaves[i].channel,
+                s_slaves[i].version,
+                c_h, c_m, c_s,
+                age_s);
+            SEND(row);
+        }
+        xSemaphoreGive(s_slaves_mutex);
+        if (any) SEND("</table>");
+        else SEND("<p>No slaves detected yet.</p>");
+    } else {
+        SEND("<p>Busy, retry.</p>");
+    }
+    SEND("</div>");
+
     /* ── JavaScript ───────────────────────────────────────────────────── */
     SEND("<script>"
          /* refresh control — only active on Status tab */
@@ -473,15 +583,15 @@ static esp_err_t root_handler(httpd_req_t *req) {
          "function stopRefresh(){clearInterval(tmr);tmr=null;}"
          /* tab switching — preserves selection in URL hash across reloads */
          "function showTab(n){"
-         "['ts','to','ta'].forEach(function(id){"
+         "['ts','to','ta','tsl'].forEach(function(id){"
          "document.getElementById(id).className='tc';});"
          "document.querySelectorAll('.tb').forEach(function(b){"
          "b.classList.remove('on');});"
-         "var ids={status:'ts',ota:'to',alarm:'ta'};"
+         "var ids={status:'ts',ota:'to',alarm:'ta',slaves:'tsl'};"
          "document.getElementById(ids[n]).className='tc on';"
          "document.querySelector('[data-tab=\"'+n+'\"]').classList.add('on');"
          "location.hash=n;"
-         "if(n==='status'){startRefresh();}else{stopRefresh();}}"
+         "if(n==='status'||n==='slaves'){startRefresh();}else{stopRefresh();}}"
          /* OTA */
          "function pickFile(){stopRefresh();document.getElementById('fw').click();}"
          "document.getElementById('fw').onchange=function(){"

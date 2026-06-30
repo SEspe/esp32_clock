@@ -30,6 +30,9 @@ static esp_ip4_addr_t s_ip_addr = {0};
 
 typedef enum { ALARM_STATE_OFF = 0, ALARM_STATE_ARMED = 1, ALARM_STATE_ACTIVE = 2 } alarm_state_t;
 typedef struct { uint8_t state; } __attribute__((packed)) alarm_msg_t;
+typedef struct { uint8_t ip[4]; char version[16]; } __attribute__((packed)) slave_announce_t;
+
+static const uint8_t ESPNOW_BROADCAST[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
 static volatile alarm_state_t slave_alarm_state = ALARM_STATE_OFF;
 
@@ -100,9 +103,32 @@ static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data,
     }
 }
 
+static void espnow_send_announce(void) {
+    if (s_ip_addr.addr == 0) return;
+    slave_announce_t ann = {0};
+    ann.ip[0] = s_ip_addr.addr & 0xFF;
+    ann.ip[1] = (s_ip_addr.addr >> 8) & 0xFF;
+    ann.ip[2] = (s_ip_addr.addr >> 16) & 0xFF;
+    ann.ip[3] = (s_ip_addr.addr >> 24) & 0xFF;
+    strncpy(ann.version, esp_app_get_description()->version, sizeof(ann.version) - 1);
+    esp_now_send(ESPNOW_BROADCAST, (uint8_t *)&ann, sizeof(ann));
+}
+
+static void announce_task(void *arg) {
+    while (1) {
+        espnow_send_announce();
+        vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+}
+
 static void espnow_init(void) {
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_recv_cb(espnow_recv_cb));
+    esp_now_peer_info_t peer = {0};
+    memcpy(peer.peer_addr, ESPNOW_BROADCAST, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+    ESP_ERROR_CHECK(esp_now_add_peer(&peer));
 }
 
 /* ── Web server ───────────────────────────────────────────────────────── */
@@ -423,6 +449,7 @@ void app_main(void) {
     wifi_init();
     espnow_init();
     webserver_init();
+    xTaskCreate(announce_task, "announce", 2048, NULL, 4, NULL);
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));

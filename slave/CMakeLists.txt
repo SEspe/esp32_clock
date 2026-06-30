@@ -1,4 +1,4 @@
 cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(PROJECT_VER "slave-v1.0")
+set(PROJECT_VER "slave-v1.1")
 project(esp32_slave)
