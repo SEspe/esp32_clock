@@ -188,6 +188,14 @@ static void time_init(void) {
 
 /* ── Web server ───────────────────────────────────────────────────────── */
 
+static void slot_version(const esp_partition_t *part, char *out, size_t len) {
+    esp_app_desc_t d;
+    if (part && esp_ota_get_partition_description(part, &d) == ESP_OK)
+        snprintf(out, len, "%s", d.version);
+    else
+        snprintf(out, len, "(empty)");
+}
+
 static esp_err_t root_handler(httpd_req_t *req) {
     time_t now = time(NULL);
     struct tm t;
@@ -208,25 +216,44 @@ static esp_err_t root_handler(httpd_req_t *req) {
     uint32_t uptime_s = esp_timer_get_time() / 1000000;
     uint32_t up_h = uptime_s / 3600, up_m = (uptime_s % 3600) / 60, up_s = uptime_s % 60;
 
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *p0 = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+    const esp_partition_t *p1 = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+    char v0[32], v1[32];
+    slot_version(p0, v0, sizeof(v0));
+    slot_version(p1, v1, sizeof(v1));
+    const char *r0 = (running == p0) ? " &lt;-- running" : "";
+    const char *r1 = (running == p1) ? " &lt;-- running" : "";
+    const char *b0 = (running == p0) ? "disabled" : "";
+    const char *b1 = (running == p1) ? "disabled" : "";
+
     char body[2048];
     snprintf(body, sizeof(body),
         "<!DOCTYPE html><html><head>"
-        "<meta http-equiv=\"refresh\" content=\"1\">"
         "<style>body{font-family:monospace;padding:20px}</style>"
         "</head><body>"
         "<pre>Firmware: %s\nDate:     %s\nTime:     %s\nUptime:   %02"PRIu32":%02"PRIu32":%02"PRIu32"</pre>"
-        "<hr><h3>Firmware Update (OTA)</h3>"
+        "<hr><h3>Installed slots</h3>"
+        "<p>ota_0: %s%s <button %s onclick=\"boot(0)\">Boot this</button></p>"
+        "<p>ota_1: %s%s <button %s onclick=\"boot(1)\">Boot this</button></p>"
+        "<hr><h3>Upload new firmware</h3>"
         "<input type=\"file\" id=\"fw\">"
         "<button onclick=\"upload()\">Upload &amp; Reboot</button>"
         "<div id=\"st\"></div>"
         "<script>"
-        "document.getElementById('fw').onchange=function(){"
-        "if(this.files[0]){"
-        "var m=document.querySelector('meta[http-equiv=\"refresh\"]');"
-        "if(m)m.remove();}};"
+        "var tmr=setInterval(function(){location.reload()},1000);"
+        "document.getElementById('fw').onchange=function(){if(this.files[0])clearInterval(tmr);};"
+        "async function boot(s){"
+        "clearInterval(tmr);"
+        "document.getElementById('st').textContent='Switching slot...';"
+        "const r=await fetch('/boot?slot='+s,{method:'POST'});"
+        "document.getElementById('st').textContent=await r.text();}"
         "async function upload(){"
         "const f=document.getElementById('fw').files[0];"
         "if(!f){document.getElementById('st').textContent='Select a .bin file first';return;}"
+        "clearInterval(tmr);"
         "document.getElementById('st').textContent='Uploading '+f.name+'...';"
         "try{"
         "const r=await fetch('/update',{method:'POST',body:f,"
@@ -234,10 +261,34 @@ static esp_err_t root_handler(httpd_req_t *req) {
         "document.getElementById('st').textContent=await r.text();"
         "}catch(e){document.getElementById('st').textContent='Error: '+e;}}"
         "</script></body></html>",
-        desc->version, date, tim, up_h, up_m, up_s);
+        desc->version, date, tim, up_h, up_m, up_s,
+        v0, r0, b0, v1, r1, b1);
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_sendstr(req, body);
+    return ESP_OK;
+}
+
+static esp_err_t boot_handler(httpd_req_t *req) {
+    char query[16] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    int slot = -1;
+    char val[4];
+    if (httpd_query_key_value(query, "slot", val, sizeof(val)) == ESP_OK)
+        slot = atoi(val);
+
+    const esp_partition_t *target = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP,
+        slot == 0 ? ESP_PARTITION_SUBTYPE_APP_OTA_0 : ESP_PARTITION_SUBTYPE_APP_OTA_1,
+        NULL);
+
+    if (!target || esp_ota_set_boot_partition(target) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Boot switch failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, "Switching — rebooting in 1 second.");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
     return ESP_OK;
 }
 
@@ -309,8 +360,12 @@ static void webserver_init(void) {
     httpd_uri_t update = {
         .uri = "/update", .method = HTTP_POST, .handler = update_handler,
     };
+    httpd_uri_t boot_uri = {
+        .uri = "/boot", .method = HTTP_POST, .handler = boot_handler,
+    };
     httpd_register_uri_handler(server, &root);
     httpd_register_uri_handler(server, &update);
+    httpd_register_uri_handler(server, &boot_uri);
     ESP_LOGI(TAG, "Web server started on http://" IPSTR, IP2STR(&s_ip_addr));
 }
 
